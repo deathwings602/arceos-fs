@@ -2,6 +2,10 @@
 extern crate alloc;
 mod layout;
 mod config;
+mod block_cache;
+mod block_dev;
+
+pub use block_dev::BlockDevice;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right
