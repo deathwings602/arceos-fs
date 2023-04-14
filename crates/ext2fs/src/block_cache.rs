@@ -11,13 +11,9 @@ pub struct BlockCache {
     /// underlying block id
     block_id: usize,
     /// underlying block device
-    block_device: Option<Arc<dyn BlockDevice>>,
+    block_device: Arc<dyn BlockDevice>,
     /// whether the block is dirty
     modified: bool,
-    /// whether it represent a valid block cache
-    valid: bool,
-    /// refcnt
-    refcnt: usize
 }
 
 impl BlockCache {
@@ -28,21 +24,8 @@ impl BlockCache {
         Self {
             cache,
             block_id,
-            block_device: Some(block_device),
+            block_device,
             modified: false,
-            valid: true,
-            refcnt: 0
-        }
-    }
-    pub fn empty() -> Self {
-        let cache = [0u8; BLOCK_SIZE];
-        Self {
-            cache,
-            block_id: 0,
-            block_device: None,
-            modified: false,
-            valid: false,
-            refcnt: 0
         }
     }
     /// Get the address of an offset inside the cached block data
@@ -82,9 +65,7 @@ impl BlockCache {
     pub fn sync(&mut self) {
         if self.modified {
             self.modified = false;
-            if let Some(ref device) = self.block_device {
-                device.write_block(self.block_id, &self.cache);
-            }
+            self.block_device.write_block(self.block_id, &self.cache);
         }
     }
 }
