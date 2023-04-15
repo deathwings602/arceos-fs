@@ -67,11 +67,13 @@ fn efs_test() -> std::io::Result<()> {
     let root_inode = Ext2FileSystem::root_inode(&efs);
     root_inode.create("filea", EXT2_S_IFREG);
     root_inode.create("fileb", EXT2_S_IFREG);
+    println!("After create filea and fileb:");
     for name in root_inode.ls() {
         println!("{}", name);
     }
     let filea = root_inode.find("filea").unwrap();
     let greet_str = "Hello, world!";
+    filea.clear();
     filea.write_at(0, greet_str.as_bytes());
     //let mut buffer = [0u8; 512];
     let mut buffer = [0u8; 233];
@@ -79,7 +81,21 @@ fn efs_test() -> std::io::Result<()> {
     assert_eq!(greet_str, core::str::from_utf8(&buffer[..len]).unwrap(),);
 
     root_inode.unlink("fileb");
+    println!("After unlink:");
     for name in root_inode.ls() {
+        println!("{}", name);
+    }
+
+    root_inode.create("dir_a", EXT2_S_IFDIR);
+    let dir_a = root_inode.find("dir_a").unwrap();
+    dir_a.create("filec", EXT2_S_IFREG);
+    let filec = dir_a.find("filec").unwrap();
+    filec.write_at(0, greet_str.as_bytes());
+    let len = filec.read_at(0, &mut buffer);
+    assert_eq!(greet_str, core::str::from_utf8(&buffer[..len]).unwrap(),);
+
+    println!("Under dir_a:");
+    for name in dir_a.ls() {
         println!("{}", name);
     }
 

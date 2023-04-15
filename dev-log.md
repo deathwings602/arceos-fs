@@ -53,3 +53,11 @@ bget(uint dev, uint blockno)
 + buffer_manager (no sync)
 + vfs: 先支持常见的文件操作：创建目录、创建文件，读写文件
 2. 与助教沟通，找到一个协调并发问题的方案。
+
+## 第 8 周
+1. 在 `crates/ext2fs` 中仿照 `easy-fs` 写了文件系统的接口，目前支持：创建ext2文件系统镜像、从镜像中打开文件系统 `create_file`、`create_dir`、`link` 、`unlink` 等功能。
+
+### 下一周计划
+1. 将 ext2 集成到目前的 Arceos 的文件系统框架中；
+2. 进一步完善 ext2 文件系统的功能，比如支持软链接、unlink 一个目录（目前只支持文件）、文件状态；
+3. 调研带日志的文件系统的实现，准备把 ext2 升级至 ext3。
