@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use log::*;
 
 const NUM_BLOCKS: usize = BLOCKS_PER_GRP;
 
@@ -46,10 +47,10 @@ impl BlockFile {
 }
 
 fn main() {
-    println!("Hello, world!");
+    env_logger::init();
+    efs_test();
 }
 
-#[test]
 fn efs_test() -> std::io::Result<()> {
     let block_file = Arc::new(BlockFile::new(
         OpenOptions::new()

@@ -188,7 +188,7 @@ type DataBlock = [u8; BLOCK_SIZE];
 
 // Defined Reserved Inodes
 const EXT2_BAD_INO: u32 = 1;
-const EXT2_ROOT_INO: u32 = 2;
+// const EXT2_ROOT_INO: u32 = 2; (from config)
 const EXT2_ACL_IDX_INO: u32 = 3;
 const EXT2_ACL_DATA_INO: u32 = 4;
 const EXT2_BOOT_LOADER_INO: u32 = 5;
@@ -213,7 +213,7 @@ bitflags! {
     }
 }
 
-pub const DEFAULT_IMODE: IMODE = IMODE::from_bits_truncate(0x140); // UR | UW
+pub const DEFAULT_IMODE: IMODE = IMODE::from_bits_truncate(0o755); // rwxrw-rw-
 
 // IMODE -> file format
 const EXT2_S_IFIFO: u16 = 0x1000;
@@ -407,7 +407,7 @@ impl DiskInode {
     ) -> DiskInode
     {
         DiskInode {
-            i_mode: acl_mode.bits() | file_type,
+            i_mode: acl_mode.bits() | (file_type & 0xF000),
             i_uid: uid as u16,
             i_size: 0,
             i_atime: 0,
@@ -430,7 +430,7 @@ impl DiskInode {
     }
 
     pub fn acl(&self) -> IMODE {
-        IMODE::from_bits_truncate(self.i_mode & 0x0fff)
+        IMODE::from_bits_truncate(self.i_mode)
     }
 
     pub fn file_type(&self) -> u16 {
@@ -486,11 +486,12 @@ impl DiskInode {
 
     /// Get the number of data blocks that have to be allocated given the new size of data
     pub fn blocks_num_needed(&self, new_size: u32) -> u32 {
-        if new_size >= self.i_size {
+        let allocated_size = 512 * self.i_blocks;
+        if new_size <= allocated_size {
             return 0;
         }
         let new_block_num = Self::total_blocks(new_size);
-        let old_block_num = Self::total_blocks(self.i_blocks * 512);
+        let old_block_num = Self::total_blocks(allocated_size);
         if old_block_num >= new_block_num {
             0
         } else {
@@ -531,6 +532,14 @@ impl DiskInode {
         new_blocks: Vec<u32>,
         block_device: &Arc<dyn BlockDevice>,
     ) {
+        if new_size <= self.i_size {
+            return;
+        }
+        if new_size <= self.i_blocks * 512 {
+            self.i_size = new_size;
+            return;
+        }
+        
         let mut current_blocks = self.data_blocks();
         self.i_size = new_size;
         let mut total_blocks = Self::_data_blocks(new_size);
@@ -555,7 +564,7 @@ impl DiskInode {
         get_block_cache(self.i_double_block as usize, Arc::clone(block_device))
             .lock()
             .modify(0, |indirect1: &mut IndirectBlock| {
-                while current_blocks < total_blocks.min(DOUBLE_BLOCK_BOUND as u32) {
+                while current_blocks < total_blocks.min(DOUBLE_BLOCK_NUM as u32) {
                     indirect1[current_blocks as usize] = new_blocks.next().unwrap();
                     current_blocks += 1;
                 }
@@ -628,14 +637,12 @@ impl DiskInode {
         // indirect1
         get_block_cache(self.i_double_block as usize, Arc::clone(block_device))
             .lock()
-            .modify(0, |indirect1: &mut IndirectBlock| {
+            .read(0, |indirect1: &IndirectBlock| {
                 while current_blocks < data_blocks.min(DOUBLE_BLOCK_NUM) {
                     v.push(indirect1[current_blocks]);
-                    //indirect1[current_blocks] = 0;
                     current_blocks += 1;
                 }
             });
-        // self.indirect1 = 0;
         // indirect2 block
         if data_blocks > DOUBLE_BLOCK_NUM {
             v.push(self.i_triple_block);
@@ -649,13 +656,13 @@ impl DiskInode {
         let b1 = data_blocks % DOUBLE_BLOCK_NUM;
         get_block_cache(self.i_triple_block as usize, Arc::clone(block_device))
             .lock()
-            .modify(0, |indirect2: &mut IndirectBlock| {
+            .read(0, |indirect2: &IndirectBlock| {
                 // full indirect1 blocks
-                for entry in indirect2.iter_mut().take(a1) {
+                for entry in indirect2.iter().take(a1) {
                     v.push(*entry);
                     get_block_cache(*entry as usize, Arc::clone(block_device))
                         .lock()
-                        .modify(0, |indirect1: &mut IndirectBlock| {
+                        .read(0, |indirect1: &IndirectBlock| {
                             for entry in indirect1.iter() {
                                 v.push(*entry);
                             }
@@ -666,22 +673,23 @@ impl DiskInode {
                     v.push(indirect2[a1]);
                     get_block_cache(indirect2[a1] as usize, Arc::clone(block_device))
                         .lock()
-                        .modify(0, |indirect1: &mut IndirectBlock| {
+                        .read(0, |indirect1: &IndirectBlock| {
                             for entry in indirect1.iter().take(b1) {
                                 v.push(*entry);
                             }
                         });
-                    //indirect2[a1] = 0;
                 }
             });
-        // self.indirect2 = 0;
         v
     }
 
     /// Decrease size
     pub fn decrease_size(&mut self, new_size: u32, block_device: &Arc<dyn BlockDevice>) -> Vec<u32> {
-        if Self::total_blocks(new_size) >= self.data_blocks() {
+        if Self::total_blocks(new_size) >= Self::total_blocks(self.i_blocks * 512) {
             return Vec::new();
+        }
+        if new_size >= self.i_size {
+            return  Vec::new();
         }
         let mut all_blocks = self.all_data_blocks(&block_device);
         self.i_size = new_size;

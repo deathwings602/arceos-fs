@@ -1,6 +1,7 @@
 #![allow(unused)]
 use super::{get_block_cache, BlockDevice, config::BLOCK_SIZE};
 use alloc::sync::Arc;
+use log::*;
 /// A bitmap block
 type BitmapBlock = [u64; BLOCK_SIZE/8];
 /// Number of bits in a block
@@ -62,12 +63,13 @@ impl Bitmap {
     
     /// Range allocation [start, end) (should only be used in creating file system)
     pub fn range_alloc(&self, block_device: &Arc<dyn BlockDevice>, mut start: usize, mut end: usize) {
+        debug!("range_alloc {} {}", start, end);
         assert!(start < end);
         assert!(start >= self.minimum());
         assert!(end <= self.maximum());
 
         start -= self.minimum();
-        end -= self.maximum();
+        end -= self.minimum();
 
         get_block_cache(self.block_id, Arc::clone(block_device))
             .lock()

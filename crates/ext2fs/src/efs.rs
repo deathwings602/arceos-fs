@@ -1,5 +1,6 @@
 #![allow(unused)]
 use core::mem::size_of;
+use log::*;
 
 use super::{
     block_cache_sync_all, get_block_cache, Bitmap, BlockDevice, DiskInode, BlockGroupDesc, Inode,
@@ -27,7 +28,7 @@ impl Ext2FileSystem {
     /// Create an ext2 file system in a device
     pub fn create(block_device: Arc<dyn BlockDevice>) -> Arc<Mutex<Self>> {
         assert!(block_device.block_size() == BLOCK_SIZE, "Unsupported block size");
-        
+        debug!("Create ext2 file system...");
         let mut block_num = block_device.block_num();
         let mut group_num = (block_num + BLOCKS_PER_GRP - 1)/BLOCKS_PER_GRP;
         assert!(group_num >= 1, "Size is at least 32 MB");
@@ -39,7 +40,7 @@ impl Ext2FileSystem {
         }
         assert!(group_num >= 1);
         block_num = (group_num - 1) * BLOCKS_PER_GRP + last_group_block_num;
-        let group_desc_block_num = (block_num * size_of::<BlockGroupDesc>() + BLOCK_SIZE - 1)/BLOCK_SIZE;
+        let group_desc_block_num = (group_num * size_of::<BlockGroupDesc>() + BLOCK_SIZE - 1)/BLOCK_SIZE;
 
         let mut group_desc_table:Vec<BlockGroupDesc> = Vec::new();
         for group_id in 0..group_num {
@@ -101,6 +102,11 @@ impl Ext2FileSystem {
         fs.get_inode_bitmap(0)
             .range_alloc(&block_device, 1, EXT2_GOOD_OLD_FIRST_INO);
         for group_id in 0..group_num {
+            // debug!("Range alloc block in group {} {} {}", 
+            //     group_id,
+            //     group_id * BLOCKS_PER_GRP,
+            //     fs.group_desc_table[group_id].bg_block_bitmap as usize + RESERVED_BLOCKS_PER_GRP + 1
+            // );
             fs.get_data_bitmap(group_id)
                 .range_alloc(
                     &block_device, 
@@ -108,12 +114,14 @@ impl Ext2FileSystem {
                     fs.group_desc_table[group_id].bg_block_bitmap as usize + RESERVED_BLOCKS_PER_GRP + 1
                 );
             if group_id == group_num - 1 {
-                fs.get_data_bitmap(group_id)
-                    .range_alloc(
-                        &block_device, 
-                        last_group_block_num, 
-                        (group_id + 1) * BLOCKS_PER_GRP
-                    );
+                if block_num < (group_id + 1) * BLOCKS_PER_GRP {
+                    fs.get_data_bitmap(group_id)
+                        .range_alloc(
+                            &block_device, 
+                            block_num, 
+                            (group_id + 1) * BLOCKS_PER_GRP
+                        );
+                }
             }
         }
         fs.write_meta();
@@ -125,8 +133,8 @@ impl Ext2FileSystem {
             .lock()
             .modify(root_inode_offset, |disk_inode: &mut DiskInode| {
                 *disk_inode = DiskInode::new(
-                    IMODE::from_bits_truncate(0x1FF), 
-                    EXT2_S_IFREG, 0, 0);
+                    IMODE::from_bits_truncate(0o755), 
+                    EXT2_S_IFDIR, 0, 0);
             });
 
         // TODO: create dir entry '.' and '..' for '/'
@@ -134,6 +142,11 @@ impl Ext2FileSystem {
         let root_inode = Self::root_inode(&fs);
         root_inode.link(".", EXT2_ROOT_INO);
         root_inode.link("..", EXT2_ROOT_INO);
+
+        debug!("Super block:\n {:?}", &fs.lock().super_block);
+        for (idx, desc) in fs.lock().group_desc_table.iter().enumerate() {
+            debug!("Block group {:?}:\n{:?}", idx, desc);
+        }
 
         // TODO: write super blocks and group description table to disk
         fs.lock().write_meta();
@@ -145,7 +158,7 @@ impl Ext2FileSystem {
     /// Open a file system from disk
     pub fn open(block_device: Arc<dyn BlockDevice>, cur_time: u32) -> Arc<Mutex<Self>> {
         assert!(block_device.block_size() == BLOCK_SIZE, "Unsupported block size");
-
+        debug!("Open ext2 file system...");
         let mut super_block = SuperBlock::empty();
         get_block_cache(FIRST_DATA_BLOCK, Arc::clone(&block_device))
             .lock()
@@ -175,6 +188,11 @@ impl Ext2FileSystem {
 
         fs.super_block.s_mnt_count += 1;
         fs.super_block.s_mtime = cur_time;
+
+        debug!("Super block:\n {:?}", &fs.super_block);
+        for (idx, desc) in fs.group_desc_table.iter().enumerate() {
+            debug!("Block group {:?}:\n{:?}", idx, desc);
+        }
 
         fs.write_super_block();
         block_cache_sync_all();

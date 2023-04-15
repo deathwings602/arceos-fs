@@ -1,5 +1,6 @@
 #![allow(unused)]
 use core::mem::size_of;
+use log::*;
 
 use super::{
     block_cache_sync_all, get_block_cache, BlockDevice, DiskInode, 
@@ -76,6 +77,7 @@ impl Inode {
 
     /// Find inode under a disk inode by name (DirEntry, pos, prev_offset)
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<(DirEntryHead, usize, usize)> {
+        debug!("find_inode_id");
         // assert it is a directory
         assert!(disk_inode.is_dir());
         let mut buffer = [0 as u8; MAX_NAME_LEN];
@@ -117,14 +119,16 @@ impl Inode {
                                 })
         {
             let (block_id, block_offset) = fs.get_disk_inode_pos(de.inode);
-            Some(Arc::new(Self {
+            let mut inode = Self {
                 inode_id: de.inode as usize,
                 block_id: block_id as usize,
                 block_offset,
                 fs: self.fs.clone(),
                 block_device: self.block_device.clone(),
                 file_type: de.file_type
-            }))
+            };
+            inode.read_file_type();
+            Some(Arc::new(inode))
         } else {
             None
         }
@@ -132,12 +136,14 @@ impl Inode {
 
     pub fn create(&self, name: &str, mut file_type: u16) -> Option<Arc<Inode>> {
         if self.file_type() != EXT2_FT_DIR {
+            error!("Try to create a file under a file");
             return None;
         }
         if self.get_inode_id(name).is_some() {
-            return  None;
+            error!("Try to create a file already exists");
+            return None;
         }
-        file_type &= 0xE000;
+        file_type &= 0xF000;
         let mut fs = self.fs.lock();
         let new_inode_id = fs.alloc_inode().unwrap();
         let (new_inode_block_id, new_inode_block_offset) = fs.get_disk_inode_pos(new_inode_id);
@@ -158,10 +164,12 @@ impl Inode {
             new_inode.link("..", self.inode_id);
         }
 
+        self.fs.lock().write_meta();
         Some(Arc::new(new_inode))
     }
 
     pub fn link(&self, name: &str, inode_id: usize) -> bool {
+        debug!("link {} to {}", name, inode_id);
         if inode_id == 0 {
             return false;
         }
@@ -173,6 +181,7 @@ impl Inode {
                 inode.read_file_type();
                 self.append_dir_entry(inode.inode_id, name, inode.file_type);
                 inode.increase_nlink(1);
+                self.fs.lock().write_meta();
                 true
             }
         } else {
@@ -234,10 +243,12 @@ impl Inode {
 
     /// unlink recursively
     pub fn unlink(&self, name: &str) -> bool {
+        debug!("unlink {}", name);
         if self.file_type() != EXT2_FT_DIR {
             return false;
         }
         if name == "." || name == ".." {
+            error!("Can not unlink . or ..");
             return false;
         }
 
@@ -369,6 +380,7 @@ impl Inode {
     fn append_dir_entry(&self, inode: usize, name: &str, file_type: u8) {
         let dir_entry = DirEntryHead::create(inode, name, file_type);
         self.append(dir_entry.as_bytes());
-        self.append(&name.as_bytes()[0..MAX_NAME_LEN]);
+        let name_len = name.as_bytes().len();
+        self.append(&name.as_bytes()[0..name_len.min(MAX_NAME_LEN)]);
     }
 }
