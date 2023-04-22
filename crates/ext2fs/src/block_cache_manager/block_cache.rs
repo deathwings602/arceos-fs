@@ -135,7 +135,7 @@ impl BlockCacheManager {
                 self.write_block(&evict_cache);
 
                 let ptr = evict_cache.get_ptr();
-                unsafe {(*ptr).lru_head.pop_self();}
+                // unsafe {(*ptr).lru_head.pop_self();}
 
                 // init evicted block
                 self.device.read_block(block_id, unsafe { (*ptr).cache.as_mut() });
@@ -144,7 +144,7 @@ impl BlockCacheManager {
                     (*ptr).modified = false;
                     (*ptr).valid = true;
                     (*ptr).block_id = block_id;
-                    self.lru_head.push_prev(&mut (*ptr).lru_head);
+                    // self.lru_head.push_prev(&mut (*ptr).lru_head);
                 }
 
                 // insert to block map

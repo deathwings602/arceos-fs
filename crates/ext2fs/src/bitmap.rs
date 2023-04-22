@@ -38,6 +38,7 @@ impl Bitmap {
                 None
             }
         });
+        manager.lock().release_block(bitmap_block);
         bit
     }
     /// Deallocate a block
@@ -49,6 +50,7 @@ impl Bitmap {
                 assert!(bitmap_block[bits64_pos] & (1u64 << inner_pos) > 0);
                 bitmap_block[bits64_pos] -= 1u64 << inner_pos;
             });
+        manager.lock().release_block(bitmap_block);
     }
     /// Allocate a block no matter what it originally is
     #[allow(dead_code)]
@@ -59,6 +61,7 @@ impl Bitmap {
             .modify(0, |bitmap_block: &mut BitmapBlock| {
                 bitmap_block[bits64_pos] |= 1u64 << inner_pos;
             });
+        manager.lock().release_block(bitmap_block);
     }
     
     /// Range allocation [start, end) (should only be used in creating file system)
@@ -84,6 +87,7 @@ impl Bitmap {
                     }
                 }
             });
+        manager.lock().release_block(bitmap_block);
     }
 
     /// Get the max number of allocatable blocks

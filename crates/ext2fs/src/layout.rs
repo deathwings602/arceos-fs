@@ -599,7 +599,7 @@ impl DiskInode {
                     current_blocks += 1;
                 }
             });
-        drop(double_block);
+        manager.lock().release_block(double_block);
         // alloc indirect2
         if total_blocks > DOUBLE_BLOCK_NUM as u32 {
             if current_blocks == DOUBLE_BLOCK_NUM as u32 {
@@ -647,9 +647,11 @@ impl DiskInode {
                                 indirect2[b] = new_blocks.next().unwrap();
                             }
                         });
+                    manager.lock().release_block(indirect2_block);
 
                 }
             });
+        manager.lock().release_block(indirect1_block);
     }
 
     /// Clear size to zero and return blocks that should be deallocated.
@@ -689,7 +691,7 @@ impl DiskInode {
                     current_blocks += 1;
                 }
             });
-        drop(double_block);
+        manager.lock().release_block(double_block);
         // debug!("after double block: {}", v.len());
         // indirect2 block
         if data_blocks > DOUBLE_BLOCK_NUM {
@@ -715,6 +717,7 @@ impl DiskInode {
                                 v.push(*entry);
                             }
                         });
+                    manager.lock().release_block(indirect2_block);
                 }
                 // last indirect1 block
                 if b1 > 0 {
@@ -726,8 +729,10 @@ impl DiskInode {
                                 v.push(*entry);
                             }
                         });
+                    manager.lock().release_block(indirect2_block);
                 }
             });
+        manager.lock().release_block(indirect1_block);
         v
     }
 
@@ -776,6 +781,7 @@ impl DiskInode {
                 let src = &data_block[start % BLOCK_SIZE..start % BLOCK_SIZE + block_read_size];
                 dst.copy_from_slice(src);
             });
+            manager.lock().release_block(data_block);
             read_size += block_read_size;
             // move to next block
             if end_current_block == end {
@@ -813,6 +819,7 @@ impl DiskInode {
                 let dst = &mut data_block[start % BLOCK_SIZE..start % BLOCK_SIZE + block_write_size];
                 dst.copy_from_slice(src);
             });
+            manager.lock().release_block(data_block);
             write_size += block_write_size;
             // move to next block
             if end_current_block == end {

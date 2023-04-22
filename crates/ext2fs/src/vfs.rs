@@ -44,6 +44,7 @@ impl Inode {
         let inode_block = self.fs.manager.lock().get_block_cache(self.block_id);
         let ret = inode_block.lock()
             .read(self.block_offset, f);
+        self.fs.manager.lock().release_block(inode_block);
         ret
     }
     /// Call a function over a disk inode to modify it
@@ -51,6 +52,7 @@ impl Inode {
         let inode_block = self.fs.manager.lock().get_block_cache(self.block_id);
         let ret = inode_block.lock()
             .modify(self.block_offset, f);
+        self.fs.manager.lock().release_block(inode_block);
         ret
     }
 
@@ -149,6 +151,7 @@ impl Inode {
                 disk_inode.i_atime = cur_time;
                 disk_inode.i_ctime = cur_time;
             });
+        self.fs.manager.lock().release_block(inode_block);
 
         let mut new_inode = Ext2FileSystem::get_inode(&self.fs, new_inode_id as usize).unwrap();
         new_inode.read_file_type();

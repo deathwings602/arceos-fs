@@ -105,6 +105,7 @@ impl Ext2FileSystem {
                         }
                     }
                 });
+            fs.manager.lock().release_block(block);
         }
 
         // TODO: mark reserved inodes and used data blocks
@@ -148,6 +149,7 @@ impl Ext2FileSystem {
                     IMODE::from_bits_truncate(0o755), 
                     EXT2_S_IFDIR, 0, 0);
             });
+        fs.manager.lock().release_block(inode_block);
 
         drop(inner);
         // TODO: write super blocks and group description table to disk
@@ -182,6 +184,7 @@ impl Ext2FileSystem {
             .read(SUPER_BLOCK_OFFSET, |sb: &SuperBlock| {
                 fs.inner.lock().super_block = *sb;
             });
+        fs.manager.lock().release_block(sb_block);
         
         fs.inner.lock().super_block.check_valid();
         debug!("After superblock check valid");
@@ -202,6 +205,7 @@ impl Ext2FileSystem {
                 .read(offset, |desc: &BlockGroupDesc| {
                     fs.inner.lock().group_desc_table.push(*desc);
                 });
+            fs.manager.lock().release_block(gdt_block);
         }
         let cur_time = fs.timer.get_current_time();
 
@@ -330,6 +334,7 @@ impl Ext2FileSystem {
                     *p = 0;
                 })
             });
+        self.manager.lock().release_block(target_block);
         let mut inner = self.inner.lock();
         let group_id = block_id as usize / BLOCKS_PER_GRP;
         inner.get_data_bitmap(group_id).dealloc(&self.manager, block_id as usize);
@@ -347,6 +352,7 @@ impl Ext2FileSystem {
                         *p = 0;
                     })
                 });
+            self.manager.lock().release_block(target_block);
             let group_id = *block_id as usize / BLOCKS_PER_GRP;
             inner.get_data_bitmap(group_id).dealloc(&self.manager, *block_id as usize);
             inner.super_block.s_free_blocks_count += 1;
@@ -439,6 +445,7 @@ impl Ext2FileSystemInner {
             .modify(offset, |super_block: &mut SuperBlock| {
                 *super_block = self.super_block;
             });
+        manager.lock().release_block(sb_block);
     }
 
     /// Write group description of group_id to disk
@@ -450,6 +457,7 @@ impl Ext2FileSystemInner {
             .modify(offset, |desc: &mut BlockGroupDesc| {
                 *desc = self.group_desc_table[group_id];
             });
+        manager.lock().release_block(gd_block);
     }
 
     /// Write all group description to disk
