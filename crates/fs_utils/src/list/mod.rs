@@ -136,6 +136,8 @@ impl<T> ListNode<T> {
     }
 
     pub fn pop_self(&mut self) {
+        debug_assert!(unsafe { (*self.next).prev == self });
+        debug_assert!(unsafe { (*self.prev).next == self });
         let prev = self.prev;
         let next = self.next;
         unsafe {

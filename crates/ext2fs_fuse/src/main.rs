@@ -1,6 +1,7 @@
 #![allow(unused)]
 use clap::{App, Arg};
-use ext2fs::{BlockDevice, Ext2FileSystem, BLOCK_SIZE, BLOCKS_PER_GRP, EXT2_S_IFDIR, EXT2_S_IFREG};
+use ext2fs::{BlockDevice, Ext2FileSystem, BLOCK_SIZE, BLOCKS_PER_GRP, EXT2_S_IFDIR, EXT2_S_IFREG,
+            TimeProvider, ZeroTimeProvider};
 use std::fs::{read_dir, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -59,10 +60,10 @@ fn efs_test() -> std::io::Result<()> {
             .create(true)
             .open("target/fs.img")?, NUM_BLOCKS 
     ));
-    Ext2FileSystem::create(block_file.clone());
+    Ext2FileSystem::create(block_file.clone(), Arc::new(ZeroTimeProvider));
     let efs = Ext2FileSystem::open(
         block_file.clone(), 
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32
+        Arc::new(ZeroTimeProvider)
     );
     let root_inode = Ext2FileSystem::root_inode(&efs);
     root_inode.create("filea", EXT2_S_IFREG);

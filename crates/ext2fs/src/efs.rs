@@ -1,9 +1,13 @@
 #![allow(unused)]
+use crate::block_cache_manager::BlockCacheManager;
+use crate::mutex::SpinMutex;
+use crate::timer::TimeProvider;
 use core::mem::size_of;
+use fs_utils::sync::Spin;
 use log::*;
 
 use super::{
-    block_cache_sync_all, get_block_cache, Bitmap, BlockDevice, DiskInode, BlockGroupDesc, Inode,
+    Bitmap, BlockDevice, DiskInode, BlockGroupDesc, Inode,
     SuperBlock, config::{
         BLOCK_SIZE, BLOCKS_PER_GRP, RESERVED_BLOCKS_PER_GRP, EXT2_ROOT_INO,
         FIRST_DATA_BLOCK, INODES_PER_GRP, EXT2_GOOD_OLD_FIRST_INO, SUPER_BLOCK_OFFSET
@@ -15,18 +19,20 @@ use spin::Mutex;
 
 pub struct Ext2FileSystem {
     ///Real device
-    pub block_device: Arc<dyn BlockDevice>,
-    /// Super block cache
-    pub super_block: SuperBlock,
-    /// Group description
-    pub group_desc_table: Vec<BlockGroupDesc>
+    pub manager: SpinMutex<BlockCacheManager>,
+    /// provide time
+    pub timer: Arc<dyn TimeProvider>,
+    /// inner meta data
+    inner: Mutex<Ext2FileSystemInner>
 }
 
 type DataBlock = [u8; BLOCK_SIZE];
 
+const MAX_CACHE_NUM: usize = 50;
+
 impl Ext2FileSystem {
     /// Create an ext2 file system in a device
-    pub fn create(block_device: Arc<dyn BlockDevice>) -> Arc<Mutex<Self>> {
+    pub fn create(block_device: Arc<dyn BlockDevice>, timer: Arc<dyn TimeProvider>) -> Arc<Self> {
         assert!(block_device.block_size() == BLOCK_SIZE, "Unsupported block size");
         debug!("Create ext2 file system...");
         let mut block_num = block_device.block_num();
@@ -79,16 +85,19 @@ impl Ext2FileSystem {
             "Image by hsh"
         );
 
-        let mut fs = Self {
-            block_device: block_device.clone(),
-            super_block,
-            group_desc_table
-        };
+        let mut cache_manager = BlockCacheManager::new();
+
+        let mut fs = Arc::new(Self {
+            manager: SpinMutex::new(cache_manager),
+            timer,
+            inner: Mutex::new(Ext2FileSystemInner::new(super_block, group_desc_table))
+        });
+        fs.manager.lock().init(block_device.clone(), MAX_CACHE_NUM);
 
         // clear all blocks except the first 1024 bytes
         for i in 0..block_num {
-            get_block_cache(i as usize, Arc::clone(&block_device))
-                .lock()
+            let block = fs.manager.lock().get_block_cache(i as _);
+            block.lock()
                 .modify(0, |data_block: &mut DataBlock| {
                     for (idx, byte) in data_block.iter_mut().enumerate() {
                         if i != 0 || idx >= 1024 {
@@ -99,127 +108,298 @@ impl Ext2FileSystem {
         }
 
         // TODO: mark reserved inodes and used data blocks
-        fs.get_inode_bitmap(0)
-            .range_alloc(&block_device, 1, EXT2_GOOD_OLD_FIRST_INO);
+        let mut inner = fs.inner.lock();
+        debug!("Super block:\n {:?}", &inner.super_block);
+        for (idx, desc) in inner.group_desc_table.iter().enumerate() {
+            debug!("Block group {:?}:\n{:?}", idx, desc);
+        }
+        inner.get_inode_bitmap(0)
+            .range_alloc(&fs.manager, 1, EXT2_GOOD_OLD_FIRST_INO);
         for group_id in 0..group_num {
             // debug!("Range alloc block in group {} {} {}", 
             //     group_id,
             //     group_id * BLOCKS_PER_GRP,
             //     fs.group_desc_table[group_id].bg_block_bitmap as usize + RESERVED_BLOCKS_PER_GRP + 1
             // );
-            fs.get_data_bitmap(group_id)
+            inner.get_data_bitmap(group_id)
                 .range_alloc(
-                    &block_device, 
+                    &fs.manager, 
                     group_id * BLOCKS_PER_GRP, 
-                    fs.group_desc_table[group_id].bg_block_bitmap as usize + RESERVED_BLOCKS_PER_GRP + 1
+                    inner.group_desc_table[group_id].bg_block_bitmap as usize + RESERVED_BLOCKS_PER_GRP + 1
                 );
             if group_id == group_num - 1 {
                 if block_num < (group_id + 1) * BLOCKS_PER_GRP {
-                    fs.get_data_bitmap(group_id)
+                    inner.get_data_bitmap(group_id)
                         .range_alloc(
-                            &block_device, 
+                            &fs.manager, 
                             block_num, 
                             (group_id + 1) * BLOCKS_PER_GRP
                         );
                 }
             }
         }
-        fs.write_meta();
-        block_cache_sync_all();
 
         // TODO: init '/' inode
-        let (root_inode_block_id, root_inode_offset) = fs.get_disk_inode_pos(EXT2_ROOT_INO as u32);
-        get_block_cache(root_inode_block_id as usize, Arc::clone(&block_device))
-            .lock()
+        let (root_inode_block_id, root_inode_offset) = inner.get_disk_inode_pos(EXT2_ROOT_INO as u32);
+        let inode_block = fs.manager.lock().get_block_cache(root_inode_block_id as _);
+        inode_block.lock()
             .modify(root_inode_offset, |disk_inode: &mut DiskInode| {
                 *disk_inode = DiskInode::new(
                     IMODE::from_bits_truncate(0o755), 
                     EXT2_S_IFDIR, 0, 0);
             });
 
+        drop(inner);
+        // TODO: write super blocks and group description table to disk
+        fs.write_meta();
+
         // TODO: create dir entry '.' and '..' for '/'
-        let fs = Arc::new(Mutex::new(fs));
         let root_inode = Self::root_inode(&fs);
         root_inode.link(".", EXT2_ROOT_INO);
         root_inode.link("..", EXT2_ROOT_INO);
-
-        debug!("Super block:\n {:?}", &fs.lock().super_block);
-        for (idx, desc) in fs.lock().group_desc_table.iter().enumerate() {
-            debug!("Block group {:?}:\n{:?}", idx, desc);
-        }
-
-        // TODO: write super blocks and group description table to disk
-        fs.lock().write_meta();
-        block_cache_sync_all();
 
         fs
     }
 
     /// Open a file system from disk
-    pub fn open(block_device: Arc<dyn BlockDevice>, cur_time: u32) -> Arc<Mutex<Self>> {
+    pub fn open(block_device: Arc<dyn BlockDevice>, timer: Arc<dyn TimeProvider>) -> Arc<Self> {
         assert!(block_device.block_size() == BLOCK_SIZE, "Unsupported block size");
         debug!("Open ext2 file system...");
-        let mut super_block = SuperBlock::empty();
-        get_block_cache(FIRST_DATA_BLOCK, Arc::clone(&block_device))
-            .lock()
+        let fs = Arc::new(Self {
+            manager: SpinMutex::new(BlockCacheManager::new()),
+            timer,
+            inner: Mutex::new(Ext2FileSystemInner::new(SuperBlock::empty(), Vec::new()))
+        });
+        fs.manager.lock().init(block_device.clone(), MAX_CACHE_NUM);
+        // get_block_cache(FIRST_DATA_BLOCK, Arc::clone(&block_device))
+        //     .lock()
+        //     .read(SUPER_BLOCK_OFFSET, |sb: &SuperBlock| {
+        //         super_block = *sb;
+        //     });
+        debug!("After manager init");
+        let sb_block = fs.manager.lock().get_block_cache(FIRST_DATA_BLOCK);
+        sb_block.lock()
             .read(SUPER_BLOCK_OFFSET, |sb: &SuperBlock| {
-                super_block = *sb;
+                fs.inner.lock().super_block = *sb;
             });
         
-        super_block.check_valid();
+        fs.inner.lock().super_block.check_valid();
+        debug!("After superblock check valid");
+        
+        let s_block_group_nr = fs.inner.lock().super_block.s_block_group_nr;
+        let s_first_data_block = fs.inner.lock().super_block.s_first_data_block;
 
-        let mut group_desc_table: Vec<BlockGroupDesc> = Vec::new();
-
-        for group_id in 0..super_block.s_block_group_nr as usize {
-            let block_id = super_block.s_first_data_block as usize + 1 + (group_id * size_of::<BlockGroupDesc>())/BLOCK_SIZE;
+        for group_id in 0..s_block_group_nr as usize {
+            let block_id = s_first_data_block as usize + 1 + (group_id * size_of::<BlockGroupDesc>())/BLOCK_SIZE;
             let offset = (group_id * size_of::<BlockGroupDesc>())%BLOCK_SIZE;
-            get_block_cache(block_id, Arc::clone(&block_device))
-                .lock()
+            // get_block_cache(block_id, Arc::clone(&block_device))
+            //     .lock()
+            //     .read(offset, |desc: &BlockGroupDesc| {
+            //         group_desc_table.push(*desc);
+            //     });
+            let gdt_block = fs.manager.lock().get_block_cache(block_id);
+            gdt_block.lock()
                 .read(offset, |desc: &BlockGroupDesc| {
-                    group_desc_table.push(*desc);
+                    fs.inner.lock().group_desc_table.push(*desc);
                 });
         }
+        let cur_time = fs.timer.get_current_time();
 
-        let mut fs = Self {
-            block_device: Arc::clone(&block_device),
-            super_block,
-            group_desc_table
-        };
+        {
+            let mut inner = fs.inner.lock();
+            inner.super_block.s_mnt_count += 1;
+            inner.super_block.s_mtime = cur_time;
+        }
 
-        fs.super_block.s_mnt_count += 1;
-        fs.super_block.s_mtime = cur_time;
-
-        debug!("Super block:\n {:?}", &fs.super_block);
-        for (idx, desc) in fs.group_desc_table.iter().enumerate() {
+        debug!("Super block:\n {:?}", &fs.inner.lock().super_block);
+        for (idx, desc) in fs.inner.lock().group_desc_table.iter().enumerate() {
             debug!("Block group {:?}:\n{:?}", idx, desc);
         }
 
         fs.write_super_block();
-        block_cache_sync_all();
 
-        Arc::new(Mutex::new(fs))
+        fs
     }
 
     /// Get root inode
-    pub fn root_inode(efs: &Arc<Mutex<Self>>) -> Inode {
+    pub fn root_inode(efs: &Arc<Self>) -> Inode {
         Self::get_inode(efs, EXT2_ROOT_INO as usize).unwrap()
     }
 
-    pub fn get_inode(efs: &Arc<Mutex<Self>>, inode_id: usize) -> Option<Inode> {
-        let _fs = efs.lock();
-        let block_device = Arc::clone(&_fs.block_device);
-        if inode_id == 0 || inode_id > _fs.super_block.s_inodes_count as usize {
+    pub fn get_inode(efs: &Arc<Self>, inode_id: usize) -> Option<Inode> {
+        let inner = efs.inner.lock();
+        if inode_id == 0 || inode_id > inner.super_block.s_inodes_count as usize {
             None
         } else {
-            let (block_id, offset) = _fs.get_disk_inode_pos(inode_id as u32);
+            let (block_id, offset) = inner.get_disk_inode_pos(inode_id as u32);
+            drop(inner);
             Some(Inode::new(
                 inode_id,
                 block_id as usize,
                 offset,
-                Arc::clone(efs),
-                block_device
+                Arc::clone(efs)
             ))
         }
+    }
+
+    /// Get inode block_id and offset from inode_id
+    pub fn get_disk_inode_pos(&self, mut inode_id: u32) -> (u32, usize) {
+        self.inner.lock().get_disk_inode_pos(inode_id)
+    }
+
+    // /// Get inode bitmap for group x
+    // pub fn get_inode_bitmap(&self, group_id: usize) -> Bitmap {
+    //     self.inner.lock().get_inode_bitmap(group_id)
+    // }
+
+    // /// Get data bitmap for group x
+    // pub fn get_data_bitmap(&self, group_id: usize) -> Bitmap {
+    //     self.inner.lock().get_data_bitmap(group_id)
+    // }
+
+    /// Allocate inode (will modify meta data)
+    pub fn alloc_inode(&self) -> Option<u32> {
+        let mut inner = self.inner.lock();
+        for group_id in 0..inner.group_desc_table.len() {
+            if let Some(inode_id) = inner.get_inode_bitmap(group_id).alloc(&self.manager) {
+                inner.group_desc_table[group_id].bg_free_inodes_count -= 1; // still need to mantain bg_used_dir_count
+                inner.super_block.s_free_inodes_count -= 1;
+                return  Some(inode_id as u32);
+            }
+        }
+        None
+    }
+
+    /// Allocate data block (will modify meta data)
+    pub fn alloc_data(&self) -> Option<u32> {
+        let mut inner = self.inner.lock();
+        for group_id in 0..inner.group_desc_table.len() {
+            if let Some(block_id) = inner.get_data_bitmap(group_id).alloc(&self.manager) {
+                inner.group_desc_table[group_id].bg_free_blocks_count -= 1; // still need to mantain bg_used_dir_count
+                inner.super_block.s_free_blocks_count -= 1;
+                return Some(block_id as u32);
+            }
+        }
+        None
+    }
+
+    /// Batch allocate data
+    pub fn batch_alloc_data(&self, block_num: usize) -> Vec<u32> {
+        let mut inner = self.inner.lock();
+        let mut allocated_blocks: Vec<u32> = Vec::new();
+        for _ in 0..block_num {
+            let block_id = {
+                let mut result = None;
+                for group_id in 0..inner.group_desc_table.len() {
+                    if let Some(block_id) = inner.get_data_bitmap(group_id).alloc(&self.manager) {
+                        inner.group_desc_table[group_id].bg_free_blocks_count -= 1; // still need to mantain bg_used_dir_count
+                        inner.super_block.s_free_blocks_count -= 1;
+                        result = Some(block_id as u32);
+                        break;
+                    }
+                }
+                result
+            };
+            if let Some(bid) = block_id {
+                allocated_blocks.push(bid);
+            } else {
+                return allocated_blocks;
+            }
+        }
+
+        allocated_blocks
+    }
+
+    /// Dealloc inode (will modify meta data)
+    pub fn dealloc_inode(&self, inode_id: u32) {
+        assert!(inode_id != 0);
+        let mut inner = self.inner.lock();
+        let group_id = (inode_id as usize - 1) / INODES_PER_GRP;
+        inner.get_inode_bitmap(group_id).dealloc(&self.manager, inode_id as usize);
+
+        inner.super_block.s_free_inodes_count += 1;
+        inner.group_desc_table[group_id].bg_free_inodes_count += 1;
+    }
+
+    /// Dealloc inode (will modify meta data)
+    pub fn dealloc_block(&self, block_id: u32) {
+        let target_block = self.manager.lock().get_block_cache(block_id as _);
+        target_block.lock()
+            .modify(0, |data_block: &mut DataBlock| {
+                data_block.iter_mut().for_each(|p| {
+                    *p = 0;
+                })
+            });
+        let mut inner = self.inner.lock();
+        let group_id = block_id as usize / BLOCKS_PER_GRP;
+        inner.get_data_bitmap(group_id).dealloc(&self.manager, block_id as usize);
+        inner.super_block.s_free_blocks_count += 1;
+        inner.group_desc_table[group_id].bg_free_blocks_count += 1;
+    }
+
+    pub fn batch_dealloc_block(&self, blocks: &Vec<u32>) {
+        let mut inner = self.inner.lock();
+        for block_id in blocks {
+            let target_block = self.manager.lock().get_block_cache(*block_id as _);
+            target_block.lock()
+                .modify(0, |data_block: &mut DataBlock| {
+                    data_block.iter_mut().for_each(|p| {
+                        *p = 0;
+                    })
+                });
+            let group_id = *block_id as usize / BLOCKS_PER_GRP;
+            inner.get_data_bitmap(group_id).dealloc(&self.manager, *block_id as usize);
+            inner.super_block.s_free_blocks_count += 1;
+            inner.group_desc_table[group_id].bg_free_blocks_count += 1;
+        }
+    }
+
+    /// Write super block to disk
+    pub fn write_super_block(&self) {
+        self.inner.lock().write_super_block(&self.manager);
+    }
+
+    // /// Write group description of group_id to disk
+    // pub fn write_group_desc(&self, group_id: usize) {
+    //     let block_id = self.super_block.s_first_data_block as usize + 1 + (group_id * size_of::<BlockGroupDesc>())/BLOCK_SIZE;
+    //     let offset = (group_id * size_of::<BlockGroupDesc>())%BLOCK_SIZE;
+    //     get_block_cache(block_id, Arc::clone(&self.block_device))
+    //         .lock()
+    //         .modify(offset, |desc: &mut BlockGroupDesc| {
+    //             *desc = self.group_desc_table[group_id];
+    //         });
+    // }
+
+    // /// Write all group description to disk
+    // pub fn write_all_group_desc(&self) {
+    //     for group_id in 0..self.group_desc_table.len() {
+    //         self.write_group_desc(group_id);
+    //     }
+    // }
+
+    /// Write all meta data to disk
+    pub fn write_meta(&self) {
+        self.inner.lock().write_meta(&self.manager);
+    }
+}
+
+impl Drop for Ext2FileSystem {
+    fn drop(&mut self) {
+        self.write_meta();
+        self.manager.lock().sync_all_block();
+    }
+}
+
+struct Ext2FileSystemInner {
+    /// Super block cache
+    pub super_block: SuperBlock,
+    /// Group description
+    pub group_desc_table: Vec<BlockGroupDesc>,
+}
+
+impl Ext2FileSystemInner {
+    pub fn new(sb: SuperBlock, gdt: Vec<BlockGroupDesc>) -> Self {
+        Self { super_block: sb, group_desc_table: gdt }
     }
 
     /// Get inode block_id and offset from inode_id
@@ -251,94 +431,37 @@ impl Ext2FileSystem {
         )
     }
 
-    /// Allocate inode (will modify meta data)
-    pub fn alloc_inode(&mut self) -> Option<u32> {
-        for group_id in 0..self.group_desc_table.len() {
-            if let Some(inode_id) = self.get_inode_bitmap(group_id).alloc(&self.block_device) {
-                self.group_desc_table[group_id].bg_free_inodes_count -= 1; // still need to mantain bg_used_dir_count
-                self.super_block.s_free_inodes_count -= 1;
-                return  Some(inode_id as u32);
-            }
-        }
-        None
-    }
-
-    /// Allocate data block (will modify meta data)
-    pub fn alloc_data(&mut self) -> Option<u32> {
-        for group_id in 0..self.group_desc_table.len() {
-            if let Some(block_id) = self.get_data_bitmap(group_id).alloc(&self.block_device) {
-                self.group_desc_table[group_id].bg_free_blocks_count -= 1; // still need to mantain bg_used_dir_count
-                self.super_block.s_free_blocks_count -= 1;
-                return  Some(block_id as u32);
-            }
-        }
-        None
-    }
-
-    /// Dealloc inode (will modify meta data)
-    pub fn dealloc_inode(&mut self, inode_id: u32) {
-        assert!(inode_id != 0);
-        let group_id = (inode_id as usize - 1) / INODES_PER_GRP;
-        self.get_inode_bitmap(group_id).dealloc(&self.block_device, inode_id as usize);
-
-        self.super_block.s_free_inodes_count += 1;
-        self.group_desc_table[group_id].bg_free_inodes_count += 1;
-    }
-
-    /// Dealloc inode (will modify meta data)
-    pub fn dealloc_block(&mut self, block_id: u32) {
-        get_block_cache(block_id as usize, Arc::clone(&self.block_device))
-            .lock()
-            .modify(0, |data_block: &mut DataBlock| {
-                data_block.iter_mut().for_each(|p| {
-                    *p = 0;
-                })
-            });
-        
-        let group_id = block_id as usize / BLOCKS_PER_GRP;
-        self.get_data_bitmap(group_id).dealloc(&self.block_device, block_id as usize);
-        self.super_block.s_free_blocks_count += 1;
-        self.group_desc_table[group_id].bg_free_blocks_count += 1;
-    }
-
     /// Write super block to disk
-    pub fn write_super_block(&self) {
+    pub fn write_super_block(&self, manager: &SpinMutex<BlockCacheManager>) {
         let offset = if self.super_block.s_first_data_block == 0 { 1024 } else { 0 };
-        get_block_cache(self.super_block.s_first_data_block as usize, Arc::clone(&self.block_device))
-            .lock()
+        let sb_block = manager.lock().get_block_cache(self.super_block.s_first_data_block as _);
+        sb_block.lock()
             .modify(offset, |super_block: &mut SuperBlock| {
                 *super_block = self.super_block;
             });
     }
 
     /// Write group description of group_id to disk
-    pub fn write_group_desc(&self, group_id: usize) {
+    pub fn write_group_desc(&self, group_id: usize, manager: &SpinMutex<BlockCacheManager>) {
         let block_id = self.super_block.s_first_data_block as usize + 1 + (group_id * size_of::<BlockGroupDesc>())/BLOCK_SIZE;
         let offset = (group_id * size_of::<BlockGroupDesc>())%BLOCK_SIZE;
-        get_block_cache(block_id, Arc::clone(&self.block_device))
-            .lock()
+        let gd_block = manager.lock().get_block_cache(block_id);
+        gd_block.lock()
             .modify(offset, |desc: &mut BlockGroupDesc| {
                 *desc = self.group_desc_table[group_id];
             });
     }
 
     /// Write all group description to disk
-    pub fn write_all_group_desc(&self) {
+    pub fn write_all_group_desc(&self, manager: &SpinMutex<BlockCacheManager>) {
         for group_id in 0..self.group_desc_table.len() {
-            self.write_group_desc(group_id);
+            self.write_group_desc(group_id, manager);
         }
     }
 
     /// Write all meta data to disk
-    pub fn write_meta(&self) {
-        self.write_super_block();
-        self.write_all_group_desc();
-    }
-}
-
-impl Drop for Ext2FileSystem {
-    fn drop(&mut self) {
-        self.write_meta();
-        block_cache_sync_all();
+    pub fn write_meta(&self, manager: &SpinMutex<BlockCacheManager>) {
+        self.write_super_block(manager);
+        self.write_all_group_desc(manager);
     }
 }

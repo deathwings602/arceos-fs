@@ -1,6 +1,6 @@
-#![allow(unused)]
-use super::{get_block_cache, BlockDevice, config::BLOCK_SIZE};
-use alloc::sync::Arc;
+use super::{config::BLOCK_SIZE};
+use crate::mutex::SpinMutex;
+use crate::block_cache_manager::BlockCacheManager;
 use log::*;
 /// A bitmap block
 type BitmapBlock = [u64; BLOCK_SIZE/8];
@@ -21,11 +21,9 @@ impl Bitmap {
         }
     }
     /// Allocate a new block from a block device
-    pub fn alloc(&self, block_device: &Arc<dyn BlockDevice>) -> Option<usize> {
-        get_block_cache(
-            self.block_id, Arc::clone(block_device),
-        )
-        .lock()
+    pub fn alloc(&self, manager: &SpinMutex<BlockCacheManager>) -> Option<usize> {
+        let bitmap_block = manager.lock().get_block_cache(self.block_id);
+        let bit = bitmap_block.lock()
         .modify(0, |bitmap_block: &mut BitmapBlock| {
             if let Some((bits64_pos, inner_pos)) = bitmap_block
                 .iter()
@@ -39,30 +37,33 @@ impl Bitmap {
             } else {
                 None
             }
-        })
+        });
+        bit
     }
     /// Deallocate a block
-    pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: usize) {
+    pub fn dealloc(&self, manager: &SpinMutex<BlockCacheManager>, bit: usize) {
         let (bits64_pos, inner_pos) = self.decomposition(bit);
-        get_block_cache(self.block_id, Arc::clone(block_device))
-            .lock()
+        let bitmap_block = manager.lock().get_block_cache(self.block_id);
+        bitmap_block.lock()
             .modify(0, |bitmap_block: &mut BitmapBlock| {
                 assert!(bitmap_block[bits64_pos] & (1u64 << inner_pos) > 0);
                 bitmap_block[bits64_pos] -= 1u64 << inner_pos;
             });
     }
     /// Allocate a block no matter what it originally is
-    pub fn alloc_exact(&self, block_device: &Arc<dyn BlockDevice>, bit: usize) {
+    #[allow(dead_code)]
+    pub fn alloc_exact(&self, manager: &SpinMutex<BlockCacheManager>, bit: usize) {
         let (bits64_pos, inner_pos) = self.decomposition(bit);
-        get_block_cache(self.block_id, Arc::clone(block_device))
-            .lock()
+        let bitmap_block = manager.lock().get_block_cache(self.block_id);
+        bitmap_block.lock()
             .modify(0, |bitmap_block: &mut BitmapBlock| {
                 bitmap_block[bits64_pos] |= 1u64 << inner_pos;
             });
     }
     
     /// Range allocation [start, end) (should only be used in creating file system)
-    pub fn range_alloc(&self, block_device: &Arc<dyn BlockDevice>, mut start: usize, mut end: usize) {
+    #[allow(dead_code)]
+    pub fn range_alloc(&self, manager: &SpinMutex<BlockCacheManager>, mut start: usize, mut end: usize) {
         debug!("range_alloc {} {}", start, end);
         assert!(start < end);
         assert!(start >= self.minimum());
@@ -71,8 +72,8 @@ impl Bitmap {
         start -= self.minimum();
         end -= self.minimum();
 
-        get_block_cache(self.block_id, Arc::clone(block_device))
-            .lock()
+        let bitmap_block = manager.lock().get_block_cache(self.block_id);
+        bitmap_block.lock()
             .modify(0, |bitmap_block: &mut BitmapBlock| {
                 for (pos, inner) in bitmap_block.iter_mut().enumerate() {
                     for inner_pos in 0..64 as usize {
@@ -82,7 +83,7 @@ impl Bitmap {
                         }
                     }
                 }
-            })
+            });
     }
 
     /// Get the max number of allocatable blocks

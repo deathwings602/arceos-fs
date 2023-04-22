@@ -1,19 +1,23 @@
 #![no_std]
+#![feature(allocator_api)]
+#![feature(new_uninit)]
 extern crate alloc;
 mod layout;
 mod config;
-mod block_cache;
 mod block_dev;
 mod bitmap;
 mod efs;
 mod vfs;
+mod timer;
+mod block_cache_manager;
+mod mutex;
 
 pub use block_dev::BlockDevice;
 pub use efs::Ext2FileSystem;
 pub use vfs::Inode;
+pub use timer::{TimeProvider, ZeroTimeProvider};
 pub use config::{BLOCK_SIZE, BLOCKS_PER_GRP};
 pub use layout::{EXT2_S_IFREG, EXT2_S_IFDIR};
-use block_cache::{block_cache_sync_all, get_block_cache};
 use bitmap::Bitmap;
 use layout::{SuperBlock, DiskInode, BlockGroupDesc};
 

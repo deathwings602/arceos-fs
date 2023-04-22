@@ -11,3 +11,20 @@ pub trait BlockDevice: Send + Sync + Any {
     /// Get block num
     fn block_num(&self) -> usize;
 }
+
+pub struct NullDevice;
+
+impl BlockDevice for NullDevice {
+    fn read_block(&self, _block_id: usize, _buf: &mut [u8]) {
+        panic!("Unimplemented");
+    }
+    fn write_block(&self, _block_id: usize, _buf: &[u8]) {
+        panic!("Unimplemented");
+    }
+    fn block_num(&self) -> usize {
+        panic!("Unimplemented");
+    }
+    fn block_size(&self) -> usize {
+        panic!("Unimplemented");
+    }
+}

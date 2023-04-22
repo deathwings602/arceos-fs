@@ -32,6 +32,8 @@ impl<T, A> InListNode<T, A> {
             node: ListNode::new(PhantomData),
         }
     }
+    /// Safety
+    /// It must be called after moved.
     pub fn init(&mut self) {
         self.node.init()
     }
