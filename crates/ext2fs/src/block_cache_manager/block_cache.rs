@@ -121,7 +121,7 @@ impl BlockCacheManager {
             new_cache.lock().lru_head.lazy_init();
             // debug!("&self.lru_head = {}", &self.lru_head as *const _ as usize);
             // self.lru_head.list_check();
-            self.lru_head.push_prev(unsafe { &mut (*new_cache.get_ptr()).lru_head });
+            self.lru_head.push_prev(unsafe {&mut new_cache.unsafe_get_mut().lru_head});
             self.blocks.insert(block_id, new_cache.clone());
             // self.lru_head.list_check();
             return new_cache;
@@ -134,18 +134,15 @@ impl BlockCacheManager {
                 // write dirty data to disk
                 self.write_block(&evict_cache);
 
-                let ptr = evict_cache.get_ptr();
+                let cache_ref = unsafe { evict_cache.unsafe_get_mut() };
                 // unsafe {(*ptr).lru_head.pop_self();}
 
                 // init evicted block
-                self.device.read_block(block_id, unsafe { (*ptr).cache.as_mut() });
+                self.device.read_block(block_id, &mut cache_ref.cache);
                 // self.lru_head.list_check();
-                unsafe {
-                    (*ptr).modified = false;
-                    (*ptr).valid = true;
-                    (*ptr).block_id = block_id;
-                    // self.lru_head.push_prev(&mut (*ptr).lru_head);
-                }
+                cache_ref.modified = false;
+                cache_ref.valid = true;
+                cache_ref.block_id = block_id;
 
                 // insert to block map
                 self.blocks.insert(block_id, evict_cache.clone());
@@ -162,11 +159,10 @@ impl BlockCacheManager {
     /// Should drop lock of BlockCache right before calling this function to avoid dead lock
     pub fn release_block(&mut self, bac: Arc<SpinMutex<BlockCache>>) {
         if Arc::strong_count(&bac) == 2 {
-            let ptr = bac.get_ptr();
-            unsafe {
-                (*ptr).lru_head.pop_self();
-                self.lru_head.push_prev(&mut (*ptr).lru_head);
-            }
+            let ptr = unsafe { bac.unsafe_get_mut() };
+            ptr.lru_head.pop_self();
+            self.lru_head.push_prev(&mut ptr.lru_head);
+            
         }
     }
 

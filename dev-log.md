@@ -54,6 +54,7 @@ bget(uint dev, uint blockno)
 + vfs: 先支持常见的文件操作：创建目录、创建文件，读写文件
 2. 与助教沟通，找到一个协调并发问题的方案。
 
+
 ## 第 8 周
 1. 在 `crates/ext2fs` 中仿照 `easy-fs` 写了文件系统的接口，目前支持：创建ext2文件系统镜像、从镜像中打开文件系统 `create_file`、`create_dir`、`link` 、`unlink` 等功能。
 
@@ -61,3 +62,122 @@ bget(uint dev, uint blockno)
 1. 将 ext2 集成到目前的 Arceos 的文件系统框架中；
 2. 进一步完善 ext2 文件系统的功能，比如支持软链接、unlink 一个目录（目前只支持文件）、文件状态；
 3. 调研带日志的文件系统的实现，准备把 ext2 升级至 ext3。
+
+## 第 9 周
+1. 在 ext2 中支持了更多的文件操作，比如：symlink、chown、chmod、truncate
+2. 实现了一个 LRU 的 buffer_manager，一些细节如下：
++ 这里我们希望可以用一个容器来管理所有的缓存 (BTreeMap)，同时希望可以维护一个 LRU 队列，所以需要使用到
+侵入式链表：
+```rust
+pub struct BlockCacheManager {
+    device: Arc<dyn BlockDevice>,
+    max_cache: usize,
+    blocks: BTreeMap<usize,Arc<SpinMutex<BlockCache>>>, // 实际上管理 cache 的生命周期
+    lru_head: InListNode<BlockCache, ManagerAccessBlockCache> // LRU 链表头
+}
+
+pub struct BlockCache {
+    lru_head: InListNode<BlockCache, ManagerAccessBlockCache>,
+    block_id: usize,
+    modified: bool,
+    valid: bool,
+    cache: Box<[u8]>
+}
+```
+侵入式链表本身和普通的 C 风格的链表类似，内部使用指针来维护连接关系，但是本身不包含数据
+```rust
+pub struct  ListNode<T> {
+    prev: *mut ListNode<T>,
+    next: *mut ListNode<T>,
+    data: T
+}
+
+pub struct InListNode<T, A = ()> {
+    node: ListNode<PhantomData<(T, A)>>,
+}
+```
+这里，为了能够通过侵入式链表来访问数据，可以参考 C 语言中的技巧：即可以通过计算 `BlockCache` 中的 `lru_head` 域相对于这个结构体的偏移，然后对于 `&lru_head` 就可以减去这个偏移得到 `BlockCache` 的
+起始地址，然后将其转为：`*mut BlockCache` 即可。当然，这么做需要我们自己确保操作的安全性。
+```rust
+// 该特征中的方法可以从一个侵入式链表的表头得到包含它的结构体的引用
+pub trait ListAccess<A, B>: 'static {
+    fn offset() -> usize;
+    #[inline(always)]
+    unsafe fn get(b: &B) -> &A {
+        &*(b as *const B).cast::<u8>().sub(Self::offset()).cast()
+    }
+    #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn get_mut(b: &mut B) -> &mut A {
+        &mut *(b as *mut B).cast::<u8>().sub(Self::offset()).cast()
+    }
+}
+
+#[macro_export]
+macro_rules! inlist_access {
+    ($vis: vis $name: ident, $T: ty, $field: ident) => {
+        $vis struct $name {}
+        impl $crate::list::access::ListAccess<$T, $crate::list::instrusive::InListNode<$T, Self>>
+            for $name
+        {
+            #[inline(always)]
+            fn offset() -> usize {
+                $crate::offset_of!($T, $field)
+            }
+        }
+    };
+}
+
+// 例子
+crate::inlist_access!(AccessA, A, node);
+struct A {
+    _v1: usize,
+    node: InListNode<A, AccessA>,
+    _v2: usize,
+}
+```
++ 为了可以更加灵活使用锁，比如有些情况下需要再不持有锁的前提下对其内部进行读写（自信确保安全性），所以
+重新实现了支持以上操作的 `SpinMutex`：
+```rust
+pub struct SpinMutex<T: ?Sized, S: MutexSupport> {
+    lock: AtomicBool,
+    _marker: PhantomData<S>,
+    _not_send_sync: PhantomData<*const ()>,
+    data: UnsafeCell<T>, // actual data
+}
+
+impl<T: ?Sized, S: MutexSupport> SpinMutex<T, S> {
+    ...
+    #[inline(always)]
+    pub unsafe fn unsafe_get(&self) -> &T {
+        &*self.data.get()
+    }
+    #[allow(clippy::mut_from_ref)]
+    #[inline(always)]
+    pub unsafe fn unsafe_get_mut(&self) -> &mut T {
+        &mut *self.data.get()
+    }
+    ...
+}
+```
++ 最后简单介绍一下 LRU buffer_manager 的实现：
+
+    - 在获取缓存块时，先在 blocks 中查找，如果没有则看目前的缓存块数是否达到上限，没有达到则新分配一块，否则就顺着 LRU 队列找到一个没有被其他进程持有的块牺牲掉，这个可以使用 `Arc` 的引用计数来判断。
+    - 为了 LRU 策略可以正常执行，需要再不使用块后显示调用 `release_block`，它在没有进程使用该块时会将它重新插入到 LRU 队列的头部
+    ```rust
+    pub fn release_block(&mut self, bac: Arc<SpinMutex<BlockCache>>) {
+        if Arc::strong_count(&bac) == 2 {
+            let ptr = unsafe { bac.unsafe_get_mut() };
+            ptr.lru_head.pop_self();
+            self.lru_head.push_prev(&mut ptr.lru_head);
+            
+        }
+    }
+    ```
+
+3. 阅读了 ![ftl-os]( https://gitlab.eduxiji.net/DarkAngelEX/oskernel2022-ftlos) 中文件系统的实现，上述的侵入式链表就是参考这个实现。另外他们也实现了一个 `inode_manager` 用来管理 `inode` 的缓存，这样在读写文件的时候就不需要每次读磁盘才能知道要读写的块，同时也可以处理多个进程同时读写一个文件的情况。另外也可以更好地支持 Linux 对于文件操作的规范：即只有当文件的引用计数和被所有进程的引用计数都归零后才会回收对应的空间。
+
+### 下一周计划
+1. 实现 `inode_manager`，解决并发问题，并且加上缓存机制来提高速度（可选）
+2. 为 ext2 提供更好的封装，目前的实现都是直接操作 `Inode`，可以进一步包装成 `Dir` 和 `File`，也可以支持路径搜索等更加复杂的操作
+3. 进一步阅读 `ftl-os` 的实现以及 Linux 的相关资料，主要想要了解 vfs 如何设计（或许只是想知道？）
