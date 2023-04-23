@@ -163,7 +163,7 @@ impl<T: ?Sized, S: MutexSupport> SpinMutex<T, S> {
 + 最后简单介绍一下 LRU buffer_manager 的实现：
 
     - 在获取缓存块时，先在 blocks 中查找，如果没有则看目前的缓存块数是否达到上限，没有达到则新分配一块，否则就顺着 LRU 队列找到一个没有被其他进程持有的块牺牲掉，这个可以使用 `Arc` 的引用计数来判断。
-    - 为了 LRU 策略可以正常执行，需要再不使用块后显示调用 `release_block`，它在没有进程使用该块时会将它重新插入到 LRU 队列的头部
+    - 为了 LRU 策略可以正常执行，需要再不使用块后显示调用 `release_block`，它在没有进程使用该块时会将它重新插入到 LRU 队列的尾部
     ```rust
     pub fn release_block(&mut self, bac: Arc<SpinMutex<BlockCache>>) {
         if Arc::strong_count(&bac) == 2 {
