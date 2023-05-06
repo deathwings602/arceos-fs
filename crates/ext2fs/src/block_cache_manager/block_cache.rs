@@ -185,10 +185,12 @@ impl BlockCacheManager {
 
     /// Write all dirty blocks to disk
     pub fn sync_all_block(&self) {
+        debug!("sync all blocks");
         for (_, block) in self.blocks.iter() {
             let mut lk = block.lock();
             if lk.modified {
                 lk.modified = false;
+                debug!("Write to block {}", lk.block_id);
                 self.device.write_block(lk.block_id, lk.cache.as_ref());
             }
         }

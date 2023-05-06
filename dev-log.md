@@ -181,3 +181,54 @@ impl<T: ?Sized, S: MutexSupport> SpinMutex<T, S> {
 1. 实现 `inode_manager`，解决并发问题，并且加上缓存机制来提高速度（可选）
 2. 为 ext2 提供更好的封装，目前的实现都是直接操作 `Inode`，可以进一步包装成 `Dir` 和 `File`，也可以支持路径搜索等更加复杂的操作
 3. 进一步阅读 `ftl-os` 的实现以及 Linux 的相关资料，主要想要了解 vfs 如何设计（或许只是想知道？）
+
+## 第 10、11 周
+1. 实现了 `inode_manager` ，主要用于处理并发问题，并且加上了缓存机制来优化读写文件的速度，大致如下：
+    + 下面是 `inode` 的缓存结构，它不会写回磁盘，而是根据文件操作而同步更新，保存了文件类型、文件大小，文件中所有块的序号。其中 `valid` 用于表示该 cache 是否有效，当文件被删除时，该位会被置为 0，这样其他持有该文件的进程对于这个文件的所有操作都会失效。
+        ```rust
+        pub struct InodeCache {
+            pub inode_id: usize,
+            block_id: usize,
+            block_offset: usize,
+            fs: Arc<Ext2FileSystem>,
+
+            // cache part
+            file_type: u8,
+            size: usize,
+            blocks: Vec<u32>,
+            pub valid: bool,
+        }
+        ```
+        这样在读写文件的时候就不需要调用 `get_block_id` 方法先从磁盘中读取索引了：
+        ```rust
+        pub fn write_at(
+            &mut self,
+            offset: usize,
+            buf: &[u8],
+            manager: &SpinMutex<BlockCacheManager>,
+            cache: Option<&Vec<u32>>
+        ) -> usize {
+            // ...
+            let block_id = if let Some(blocks) = cache.as_ref() {
+                blocks[start_block]
+            } else {
+                self.get_block_id(start_block as _, manager)
+            };
+            // ...
+        }
+        ```
+
+    + 下面是 `inode_manager`，所有对 `InodeCache` 的访问都要通过它，这样可以保证全局只有一个独立的 `InodeCache`，防止出现多个线程同时读写同一个文件的情况：
+        ```rust
+        pub struct InodeCacheManager {
+            inodes: BTreeMap<usize, Arc<SpinMutex<InodeCache>>>,
+            max_inode: usize
+        }
+
+        pub struct Inode {
+            file_type: u8,
+            inner: Arc<SpinMutex<InodeCache>>
+        }
+        ```
+
+2. 

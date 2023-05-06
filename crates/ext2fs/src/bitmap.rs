@@ -41,6 +41,18 @@ impl Bitmap {
         manager.lock().release_block(bitmap_block);
         bit
     }
+    /// Test whether a bit is allocated
+    pub fn test(&self, manager: &SpinMutex<BlockCacheManager>, bit: usize) -> bool {
+        let mut res: bool = false;
+        let (bits64_pos, inner_pos) = self.decomposition(bit);
+        let bitmap_block = manager.lock().get_block_cache(self.block_id);
+        bitmap_block.lock()
+            .read(0, |bitmap_block: &BitmapBlock| {
+                res = bitmap_block[bits64_pos] & (1u64 << inner_pos) > 0;
+            });
+        manager.lock().release_block(bitmap_block);
+        res
+    }
     /// Deallocate a block
     pub fn dealloc(&self, manager: &SpinMutex<BlockCacheManager>, bit: usize) {
         let (bits64_pos, inner_pos) = self.decomposition(bit);

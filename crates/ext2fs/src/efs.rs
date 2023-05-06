@@ -1,13 +1,14 @@
 #![allow(unused)]
-use crate::block_cache_manager::BlockCacheManager;
+use crate::{block_cache_manager::BlockCacheManager, layout::EXT2_FT_DIR};
 use crate::mutex::SpinMutex;
 use crate::timer::TimeProvider;
+use crate::inode_manager::InodeCacheManager;
 use core::mem::size_of;
 use fs_utils::sync::Spin;
 use log::*;
 
 use super::{
-    Bitmap, BlockDevice, DiskInode, BlockGroupDesc, Inode,
+    Bitmap, BlockDevice, DiskInode, BlockGroupDesc, InodeCache, Inode,
     SuperBlock, config::{
         BLOCK_SIZE, BLOCKS_PER_GRP, RESERVED_BLOCKS_PER_GRP, EXT2_ROOT_INO,
         FIRST_DATA_BLOCK, INODES_PER_GRP, EXT2_GOOD_OLD_FIRST_INO, SUPER_BLOCK_OFFSET
@@ -20,6 +21,8 @@ use spin::Mutex;
 pub struct Ext2FileSystem {
     ///Real device
     pub manager: SpinMutex<BlockCacheManager>,
+    /// manage inode cache
+    pub inode_manager: SpinMutex<InodeCacheManager>,
     /// provide time
     pub timer: Arc<dyn TimeProvider>,
     /// inner meta data
@@ -87,8 +90,9 @@ impl Ext2FileSystem {
 
         let mut cache_manager = BlockCacheManager::new();
 
-        let mut fs = Arc::new(Self {
+        let fs = Arc::new(Self {
             manager: SpinMutex::new(cache_manager),
+            inode_manager: SpinMutex::new(InodeCacheManager::new(64)),
             timer,
             inner: Mutex::new(Ext2FileSystemInner::new(super_block, group_desc_table))
         });
@@ -153,13 +157,19 @@ impl Ext2FileSystem {
 
         drop(inner);
         // TODO: write super blocks and group description table to disk
-        fs.write_meta();
 
         // TODO: create dir entry '.' and '..' for '/'
-        let root_inode = Self::root_inode(&fs);
-        root_inode.link(".", EXT2_ROOT_INO);
-        root_inode.link("..", EXT2_ROOT_INO);
+        let root_inode = Self::root_inode_cache(&fs);
+        // root_inode.lock().link(".", EXT2_ROOT_INO);
+        // root_inode.lock().link("..", EXT2_ROOT_INO);
+        let mut lk = root_inode.lock();
+        lk.append_dir_entry(EXT2_ROOT_INO, ".", EXT2_FT_DIR);
+        lk.append_dir_entry(EXT2_ROOT_INO, "..", EXT2_FT_DIR);
+        lk.increase_nlink(2);
 
+        fs.write_meta();
+        // fs.inner.lock().super_block.check_valid();
+        fs.manager.lock().sync_all_block();
         fs
     }
 
@@ -169,6 +179,7 @@ impl Ext2FileSystem {
         debug!("Open ext2 file system...");
         let fs = Arc::new(Self {
             manager: SpinMutex::new(BlockCacheManager::new()),
+            inode_manager: SpinMutex::new(InodeCacheManager::new(64)),
             timer,
             inner: Mutex::new(Ext2FileSystemInner::new(SuperBlock::empty(), Vec::new()))
         });
@@ -185,7 +196,7 @@ impl Ext2FileSystem {
                 fs.inner.lock().super_block = *sb;
             });
         fs.manager.lock().release_block(sb_block);
-        
+        debug!("Super block:\n {:?}", &fs.inner.lock().super_block);
         fs.inner.lock().super_block.check_valid();
         debug!("After superblock check valid");
         
@@ -215,7 +226,6 @@ impl Ext2FileSystem {
             inner.super_block.s_mtime = cur_time;
         }
 
-        debug!("Super block:\n {:?}", &fs.inner.lock().super_block);
         for (idx, desc) in fs.inner.lock().group_desc_table.iter().enumerate() {
             debug!("Block group {:?}:\n{:?}", idx, desc);
         }
@@ -225,19 +235,25 @@ impl Ext2FileSystem {
         fs
     }
 
-    /// Get root inode
     pub fn root_inode(efs: &Arc<Self>) -> Inode {
-        Self::get_inode(efs, EXT2_ROOT_INO as usize).unwrap()
+        Inode::new(Self::root_inode_cache(efs))
     }
 
-    pub fn get_inode(efs: &Arc<Self>, inode_id: usize) -> Option<Inode> {
-        let inner = efs.inner.lock();
-        if inode_id == 0 || inode_id > inner.super_block.s_inodes_count as usize {
+    /// Get root inode
+    fn root_inode_cache(efs: &Arc<Self>) -> Arc<SpinMutex<InodeCache>> {
+        Self::get_inode_cache(efs, EXT2_ROOT_INO).unwrap()
+    }
+
+    pub fn get_inode_cache(efs: &Arc<Self>, inode_id: usize) -> Option<Arc<SpinMutex<InodeCache>>> {
+        efs.inode_manager.lock().get_or_insert(inode_id, efs)
+    } 
+
+    pub fn create_inode_cache(efs: &Arc<Self>, inode_id: usize) -> Option<InodeCache> {
+        if inode_id == 0 || !efs.inode_exists(inode_id as _) {
             None
         } else {
-            let (block_id, offset) = inner.get_disk_inode_pos(inode_id as u32);
-            drop(inner);
-            Some(Inode::new(
+            let (block_id, offset) = efs.inner.lock().get_disk_inode_pos(inode_id as u32);
+            Some(InodeCache::new(
                 inode_id,
                 block_id as usize,
                 offset,
@@ -312,6 +328,14 @@ impl Ext2FileSystem {
         }
 
         allocated_blocks
+    }
+
+    /// Test whether an inode exists
+    pub fn inode_exists(&self, inode_id: u32) -> bool {
+        assert!(inode_id != 0);
+        let mut inner = self.inner.lock();
+        let group_id = (inode_id as usize - 1) / INODES_PER_GRP;
+        inner.get_inode_bitmap(group_id).test(&self.manager, inode_id as usize)
     }
 
     /// Dealloc inode (will modify meta data)

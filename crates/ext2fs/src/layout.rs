@@ -342,7 +342,7 @@ impl SuperBlock {
     }
 
     pub fn check_valid(&self) {
-        assert!(self.s_magic == SB_MAGIC, "Bad magic num");
+        assert_eq!(self.s_magic, SB_MAGIC, "Bad magic num");
         assert!(self.s_first_data_block == FIRST_DATA_BLOCK as u32, "Wrong first data block");
         assert!(self.s_log_block_size == LOG_BLOCK_SIZE as u32 
                 && self.s_log_frag_size == LOG_FRAG_SIZE as u32, 
@@ -505,6 +505,7 @@ impl DiskInode {
 
     /// Get id of block given inner id
     pub fn get_block_id(&self, inner_id: u32, manager: &SpinMutex<BlockCacheManager>) -> u32 {
+        debug!("get block id of index {}", inner_id);
         let inner_id = inner_id as usize;
         if inner_id < DIRECT_BLOCK_NUM {
             self.i_direct_block[inner_id]
@@ -553,15 +554,17 @@ impl DiskInode {
         new_size: u32,
         new_blocks: Vec<u32>,
         manager: &SpinMutex<BlockCacheManager>
-    ) {
+    ) -> Vec<u32> {
         if new_size <= self.i_size {
-            return;
+            return Vec::new();
         }
         if new_size <= self.i_blocks * 512 {
             self.i_size = new_size;
-            return;
+            return Vec::new();
         }
         
+        let mut extra_blocks: Vec<u32> = Vec::new();
+
         let mut current_blocks = self.data_blocks();
         self.i_size = new_size;
         let mut total_blocks = Self::_data_blocks(new_size);
@@ -570,6 +573,7 @@ impl DiskInode {
         // fill direct
         while current_blocks < total_blocks.min(DIRECT_BLOCK_NUM as u32) {
             self.i_direct_block[current_blocks as usize] = new_blocks.next().unwrap();
+            extra_blocks.push(self.i_direct_block[current_blocks as usize]);
             current_blocks += 1;
         }
         // alloc indirect1
@@ -580,7 +584,7 @@ impl DiskInode {
             current_blocks -= DIRECT_BLOCK_NUM as u32;
             total_blocks -= DIRECT_BLOCK_NUM as u32;
         } else {
-            return;
+            return extra_blocks;
         }
         // fill indirect1
         // get_block_cache(self.i_double_block as usize, Arc::clone(block_device))
@@ -596,6 +600,7 @@ impl DiskInode {
             .modify(0, |indirect1: &mut IndirectBlock| {
                 while current_blocks < total_blocks.min(DOUBLE_BLOCK_NUM as u32) {
                     indirect1[current_blocks as usize] = new_blocks.next().unwrap();
+                    extra_blocks.push(indirect1[current_blocks as usize]);
                     current_blocks += 1;
                 }
             });
@@ -608,7 +613,7 @@ impl DiskInode {
             current_blocks -= DOUBLE_BLOCK_NUM as u32;
             total_blocks -= DOUBLE_BLOCK_NUM as u32;
         } else {
-            return;
+            return extra_blocks;
         }
         // fill indirect2 from (a0, b0) -> (a1, b1)
         let a0 = current_blocks as usize / DOUBLE_BLOCK_NUM;
@@ -645,6 +650,7 @@ impl DiskInode {
                         .modify(0, |indirect2: &mut IndirectBlock| {
                             for b in start..end {
                                 indirect2[b] = new_blocks.next().unwrap();
+                                extra_blocks.push(indirect2[b]);
                             }
                         });
                     manager.lock().release_block(indirect2_block);
@@ -652,6 +658,7 @@ impl DiskInode {
                 }
             });
         manager.lock().release_block(indirect1_block);
+        return extra_blocks;
     }
 
     /// Clear size to zero and return blocks that should be deallocated.
@@ -661,7 +668,7 @@ impl DiskInode {
     }
 
     /// Get all data blocks of current inode
-    pub fn all_data_blocks(&self, manager: &SpinMutex<BlockCacheManager>) -> Vec<u32> {
+    pub fn all_data_blocks(&self, manager: &SpinMutex<BlockCacheManager>, include_index: bool) -> Vec<u32> {
         let mut v: Vec<u32> = Vec::new();
         let mut data_blocks = self.data_blocks() as usize;
         // debug!("all_data_blocks called on {} blocks", data_blocks);
@@ -676,7 +683,9 @@ impl DiskInode {
         // debug!("after direct: {}", v.len());
         // indirect1 block
         if data_blocks > DIRECT_BLOCK_NUM {
-            v.push(self.i_double_block);
+            if include_index {
+                v.push(self.i_double_block);
+            }
             data_blocks -= DIRECT_BLOCK_NUM;
             current_blocks = 0;
         } else {
@@ -695,7 +704,9 @@ impl DiskInode {
         // debug!("after double block: {}", v.len());
         // indirect2 block
         if data_blocks > DOUBLE_BLOCK_NUM {
-            v.push(self.i_triple_block);
+            if include_index {
+                v.push(self.i_triple_block);
+            }
             data_blocks -= DOUBLE_BLOCK_NUM;
         } else {
             return v;
@@ -709,7 +720,9 @@ impl DiskInode {
             .read(0, |indirect2: &IndirectBlock| {
                 // full indirect1 blocks
                 for entry in indirect2.iter().take(a1) {
-                    v.push(*entry);
+                    if include_index {
+                        v.push(*entry);
+                    }
                     let indirect2_block = manager.lock().get_block_cache(*entry as _);
                     indirect2_block.lock()
                         .read(0, |indirect1: &IndirectBlock| {
@@ -721,7 +734,9 @@ impl DiskInode {
                 }
                 // last indirect1 block
                 if b1 > 0 {
-                    v.push(indirect2[a1]);
+                    if include_index {
+                        v.push(indirect2[a1]);
+                    }
                     let indirect2_block = manager.lock().get_block_cache(indirect2[a1] as _);
                     indirect2_block.lock()
                         .read(0, |indirect1: &IndirectBlock| {
@@ -738,13 +753,15 @@ impl DiskInode {
 
     /// Decrease size
     pub fn decrease_size(&mut self, new_size: u32, manager: &SpinMutex<BlockCacheManager>) -> Vec<u32> {
-        if Self::total_blocks(new_size) >= Self::total_blocks(self.i_blocks * 512) {
+        // debug!("decrease size from {} to {}", self.i_size, new_size);
+        if new_size >= self.i_size {
             return Vec::new();
         }
-        if new_size >= self.i_size {
-            return  Vec::new();
+        if Self::total_blocks(new_size) >= Self::total_blocks(self.i_blocks * 512) {
+            self.i_size = new_size;
+            return Vec::new();
         }
-        let mut all_blocks = self.all_data_blocks(manager);
+        let mut all_blocks = self.all_data_blocks(manager, true);
         self.i_size = new_size;
         self.i_blocks = Self::_data_blocks(new_size) * BLOCK_SIZE as u32 / 512;
         let remain_block_num = Self::total_blocks(new_size);
@@ -759,6 +776,7 @@ impl DiskInode {
         offset: usize,
         buf: &mut [u8],
         manager: &SpinMutex<BlockCacheManager>,
+        cache: Option<&Vec<u32>>
     ) -> usize {
         let mut start = offset;
         let end = (offset + buf.len()).min(self.i_size as usize);
@@ -774,7 +792,11 @@ impl DiskInode {
             // read and update read size
             let block_read_size = end_current_block - start;
             let dst = &mut buf[read_size..read_size + block_read_size];
-            let block_id = self.get_block_id(start_block as _, manager);
+            let block_id = if let Some(blocks) = cache.as_ref() {
+                blocks[start_block]
+            } else {
+                self.get_block_id(start_block as _, manager)
+            };
             let data_block = manager.lock().get_block_cache(block_id as _);
             data_block.lock()
             .read(0, |data_block: &DataBlock| {
@@ -799,6 +821,7 @@ impl DiskInode {
         offset: usize,
         buf: &[u8],
         manager: &SpinMutex<BlockCacheManager>,
+        cache: Option<&Vec<u32>>
     ) -> usize {
         let mut start = offset;
         let end = (offset + buf.len()).min(self.i_size as usize);
@@ -811,7 +834,11 @@ impl DiskInode {
             end_current_block = end_current_block.min(end);
             // write and update write size
             let block_write_size = end_current_block - start;
-            let block_id = self.get_block_id(start_block as _, manager);
+            let block_id = if let Some(blocks) = cache.as_ref() {
+                blocks[start_block]
+            } else {
+                self.get_block_id(start_block as _, manager)
+            };
             let data_block = manager.lock().get_block_cache(block_id as _);
             data_block.lock()
             .modify(0, |data_block: &mut DataBlock| {

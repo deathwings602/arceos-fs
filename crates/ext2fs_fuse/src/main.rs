@@ -65,44 +65,90 @@ fn efs_test() -> std::io::Result<()> {
         block_file.clone(), 
         Arc::new(ZeroTimeProvider)
     );
+
     let root_inode = Ext2FileSystem::root_inode(&efs);
-    root_inode.create("filea", EXT2_S_IFREG);
-    root_inode.create("fileb", EXT2_S_IFREG);
-    println!("After create filea and fileb:");
-    for name in root_inode.ls() {
+    let filea = root_inode.create("filea", EXT2_S_IFREG).unwrap();
+    let fileb = root_inode.create("fileb", EXT2_S_IFREG).unwrap();
+    let dirc = root_inode.create("dirc", EXT2_S_IFDIR).unwrap();
+    let filed = dirc.create("filed", EXT2_S_IFREG).unwrap();
+    let dire = dirc.create("dire", EXT2_S_IFDIR).unwrap();
+    dire.create("filef", EXT2_S_IFREG);
+    dire.create("dirg", EXT2_S_IFDIR).unwrap();
+    dirc.link("filealink", filea.inode_id().unwrap());
+    let filealink = dirc.find("filealink").unwrap();
+
+    println!("After initialize");
+    println!("Under root:");
+    for name in root_inode.ls().unwrap() {
         println!("{}", name);
     }
-    let filea = root_inode.find("filea").unwrap();
+    println!("Under dirc:");
+    for name in dirc.ls().unwrap() {
+        println!("{}", name);
+    }
+    println!("Under dire:");
+    for name in dire.ls().unwrap() {
+        println!("{}", name);
+    }
     let greet_str = "Hello, world!";
-    filea.clear();
     filea.write_at(0, greet_str.as_bytes());
-    //let mut buffer = [0u8; 512];
+    fileb.write_at(0, greet_str.as_bytes());
+
+    // basic read and write
     let mut buffer = [0u8; 233];
-    let len = filea.read_at(0, &mut buffer);
-    assert_eq!(greet_str, core::str::from_utf8(&buffer[..len]).unwrap(),);
+    let len = filea.read_at(0, &mut buffer).unwrap();
+    assert_eq!(greet_str, core::str::from_utf8(&buffer[..len]).unwrap());
 
-    root_inode.unlink("fileb");
-    println!("After unlink:");
-    for name in root_inode.ls() {
+    // ftruncate file
+    assert!(fileb.ftruncate(4096).unwrap());
+    assert!(fileb.ftruncate(4).unwrap());
+    let lenb = fileb.read_at(0, &mut buffer).unwrap();
+    println!("fileb content after truncate:");
+    println!("{}", core::str::from_utf8(&buffer[..lenb]).unwrap());
+
+    // write from another place
+    filealink.append(greet_str.as_bytes());
+    let lena = filea.read_at(0, &mut buffer).unwrap();
+    println!("filea content after write from filealink:");
+    println!("{}", core::str::from_utf8(&buffer[..lena]).unwrap());
+
+    // rm file
+    assert!(root_inode.rm_file("fileb").unwrap());
+    println!("After remove fileb");
+    println!("Under root:");
+    for name in root_inode.ls().unwrap() {
         println!("{}", name);
     }
 
-    root_inode.create("dir_a", EXT2_S_IFDIR);
-    let dir_a = root_inode.find("dir_a").unwrap();
-    dir_a.create("filec", EXT2_S_IFREG);
-    let filec = dir_a.find("filec").unwrap();
-    filec.write_at(0, greet_str.as_bytes());
-    let len = filec.read_at(0, &mut buffer);
-    assert_eq!(greet_str, core::str::from_utf8(&buffer[..len]).unwrap(),);
+    // invalid
+    assert!(fileb.disk_inode().is_none());
 
-    println!("Under dir_a:");
-    for name in dir_a.ls() {
+    // rm empty dir
+    assert!(dire.rm_dir("dirg", false).unwrap());
+
+    // rm non-empty dir FAIL
+    assert!(!dirc.rm_dir("dire", false).unwrap());
+
+    // rm non-empty dir recursively SUCCESS
+    assert!(dirc.rm_dir("dire", true).unwrap());
+
+    println!("After remove dire recursively, dirc:");
+    for name in dirc.ls().unwrap() {
         println!("{}", name);
     }
+
+    // link count
+    let disk_inode_a_before = filealink.disk_inode().unwrap();
+    assert_eq!(disk_inode_a_before.i_links_count, 2);
+    assert!(dirc.rm_file("filealink").unwrap());
+    let disk_inode_a_after = filealink.disk_inode().unwrap();
+    assert_eq!(disk_inode_a_after.i_links_count, 1);
+
+    assert!(root_inode.rm_dir("dirc", true).unwrap());
 
     let mut random_str_test = |len: usize| {
-        filea.clear();
-        assert_eq!(filea.read_at(0, &mut buffer), 0,);
+        filea.ftruncate(0);
+        assert_eq!(filea.read_at(0, &mut buffer).unwrap(), 0,);
         let mut str = String::new();
         use rand;
         // random digit
@@ -114,7 +160,7 @@ fn efs_test() -> std::io::Result<()> {
         let mut offset = 0usize;
         let mut read_str = String::new();
         loop {
-            let len = filea.read_at(offset, &mut read_buffer);
+            let len = filea.read_at(offset, &mut read_buffer).unwrap();
             if len == 0 {
                 break;
             }

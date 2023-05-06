@@ -10,28 +10,15 @@ mod efs;
 mod vfs;
 mod timer;
 mod block_cache_manager;
+mod inode_manager;
 mod mutex;
 
 pub use block_dev::BlockDevice;
 pub use efs::Ext2FileSystem;
 pub use vfs::Inode;
+use vfs::InodeCache;
 pub use timer::{TimeProvider, ZeroTimeProvider};
 pub use config::{BLOCK_SIZE, BLOCKS_PER_GRP};
 pub use layout::{EXT2_S_IFREG, EXT2_S_IFDIR};
 use bitmap::Bitmap;
 use layout::{SuperBlock, DiskInode, BlockGroupDesc};
-
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
