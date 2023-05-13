@@ -14,7 +14,8 @@ static CURRENT_DIR_PATH: Mutex<String> = Mutex::new(String::new());
 static CURRENT_DIR: LazyInit<Mutex<VfsNodeRef>> = LazyInit::new();
 
 #[cfg(feature = "fatfs")]
-type MainFileSystem = fs::fatfs::FatFileSystem;
+// type MainFileSystem = fs::fatfs::FatFileSystem;
+type MainFileSystem = fs::ext2fs::Ext2FileSystem;
 
 struct MountPoint {
     path: &'static str,
@@ -139,7 +140,8 @@ impl VfsNodeOps for RootDirectory {
 
 pub(crate) fn init_rootfs(disk: crate::dev::Disk) {
     #[cfg(feature = "fatfs")]
-    let main_fs = fs::fatfs::FatFileSystem::new(disk);
+    // let main_fs = fs::fatfs::FatFileSystem::new(disk);
+    let main_fs = fs::ext2fs::Ext2FileSystem::new(disk);
 
     MAIN_FS.init_by(Arc::new(main_fs));
     MAIN_FS.init();

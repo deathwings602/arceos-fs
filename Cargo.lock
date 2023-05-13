@@ -228,6 +228,7 @@ dependencies = [
  "cfg-if",
  "driver_block",
  "driver_common",
+ "ext2fs",
  "fatfs",
  "lazy_init",
  "log",

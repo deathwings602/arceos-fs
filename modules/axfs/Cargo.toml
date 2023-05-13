@@ -27,6 +27,7 @@ axio = { path = "../../crates/axio", features = ["alloc"] }
 axerrno = { path = "../../crates/axerrno" }
 axfs_vfs = { path = "../../crates/axfs_vfs" }
 axfs_devfs = { path = "../../crates/axfs_devfs", optional = true }
+ext2fs = { path = "../../crates/ext2fs" }
 axdriver = { path = "../axdriver", optional = true }
 axsync = { path = "../axsync", default-features = false }
 
