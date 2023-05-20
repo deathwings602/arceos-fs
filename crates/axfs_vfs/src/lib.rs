@@ -10,9 +10,10 @@ mod structs;
 pub mod path;
 
 use alloc::sync::Arc;
+use alloc::string::String;
 use axerrno::{ax_err, AxError, AxResult};
 
-pub use self::structs::{FileSystemInfo, VfsDirEntry, VfsNodeAttr, VfsNodePerm, VfsNodeType};
+pub use self::structs::{FileSystemInfo, VfsDirEntry, VfsNodeAttr, VfsNodePerm, VfsNodeType, LinkHandle};
 
 pub type VfsNodeRef = Arc<dyn VfsNodeOps>;
 
@@ -101,12 +102,34 @@ pub trait VfsNodeOps: Send + Sync {
     }
 
     /// Remove the node with given `path` in the directory.
-    fn remove(&self, _path: &str) -> VfsResult {
+    fn remove(&self, _path: &str, _recursive: bool) -> VfsResult {
         ax_err!(Unsupported)
     }
 
     /// Read directory entries into `dirents`, starting from `start_idx`.
     fn read_dir(&self, _start_idx: usize, _dirents: &mut [VfsDirEntry]) -> VfsResult<usize> {
+        ax_err!(Unsupported)
+    }
+
+    /// Create a symbolic link to target
+    fn symlink(&self, _name: &str, _path: &str) -> VfsResult {
+        ax_err!(Unsupported)
+    }
+
+    /// Create a hard link to target (maybe file or symlink)
+    fn link(&self, _name: &str, _handle: &LinkHandle) -> VfsResult {
+        ax_err!(Unsupported)
+    }
+
+    // symbolic link operation
+
+    /// Get the target this symbolic link is pointing
+    fn get_path(&self) -> VfsResult<String> {
+        ax_err!(Unsupported)
+    }
+
+    /// for hard link support
+    fn get_link_handle(&self) -> VfsResult<LinkHandle> {
         ax_err!(Unsupported)
     }
 }

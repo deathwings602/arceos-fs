@@ -118,7 +118,7 @@ impl File {
         };
 
         let attr = node.get_attr()?;
-        if attr.is_dir()
+        if !attr.is_file()
             && (opts.create || opts.create_new || opts.write || opts.append || opts.truncate)
         {
             return ax_err!(IsADirectory);
@@ -247,8 +247,8 @@ impl Directory {
         crate::root::remove_file(self.access_at(path)?, path)
     }
 
-    pub fn remove_dir(&self, path: &str) -> AxResult {
-        crate::root::remove_dir(self.access_at(path)?, path)
+    pub fn remove_dir(&self, path: &str, recursive: bool) -> AxResult {
+        crate::root::remove_dir(self.access_at(path)?, path, recursive)
     }
 
     pub fn read_dir(&mut self, dirents: &mut [DirEntry]) -> AxResult<usize> {

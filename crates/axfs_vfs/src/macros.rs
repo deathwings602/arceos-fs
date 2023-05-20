@@ -33,7 +33,7 @@ macro_rules! impl_vfs_non_dir_default {
             $crate::__priv::ax_err!(NotADirectory)
         }
 
-        fn remove(&self, _path: &str) -> $crate::VfsResult {
+        fn remove(&self, _path: &str, _recursive: bool) -> $crate::VfsResult {
             $crate::__priv::ax_err!(NotADirectory)
         }
 
@@ -43,6 +43,38 @@ macro_rules! impl_vfs_non_dir_default {
             _dirents: &mut [$crate::VfsDirEntry],
         ) -> $crate::VfsResult<usize> {
             $crate::__priv::ax_err!(NotADirectory)
+        }
+
+        fn symlink(&self, _name: &str, _path: &str) -> $crate::VfsResult {
+            $crate::__priv::ax_err!(NotADirectory)
+        }
+
+        fn link(&self, _name: &str, _handle: &$crate::LinkHandle) -> $crate::VfsResult {
+            $crate::__priv::ax_err!(NotADirectory)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_ext2_common {
+    () => {
+        fn get_attr(&self) -> VfsResult<VfsNodeAttr> {
+            self.0.disk_inode()
+                .map(|disk_inode| {
+                    let (ty, perm) = map_imode(disk_inode.i_mode);
+                    VfsNodeAttr::new(perm, ty, disk_inode.i_size as _, disk_inode.i_blocks as _)
+                })
+                .map_err(map_ext2_err)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_ext2_linkable {
+    () => {
+        fn get_link_handle(&self) -> VfsResult<$crate::LinkHandle> {
+            let inode_id = self.0.inode_id().map_err(map_ext2_err)?;
+            Ok($crate::LinkHandle { inode_id, fssp_ptr: self.1.as_ptr() as usize })
         }
     };
 }
