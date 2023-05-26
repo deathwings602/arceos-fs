@@ -31,6 +31,7 @@ impl Disk {
     }
 
     /// Get the position of the cursor.
+    #[allow(unused)]
     pub fn position(&self) -> u64 {
         self.block_id * BLOCK_SIZE as u64 + self.offset as u64
     }

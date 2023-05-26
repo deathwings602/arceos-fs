@@ -3,15 +3,21 @@ ARCH ?= riscv64
 SMP ?= 1
 MODE ?= release
 LOG ?= warn
+FT ?= ext2
 
 A ?= apps/helloworld
 APP ?= $(A)
 APP_FEATURES ?=
-DISK_IMG ?= target/fs.img
-
+# DISK_IMG ?= target/fs.img
 FS ?= n
 NET ?= n
 GRAPHIC ?= n
+
+ifeq ($(FT), fat32)
+  DISK_IMG ?= disk.img
+else
+  DISK_IMG ?= target/fs.img
+endif
 
 ifeq ($(wildcard $(APP)),)
   $(error Application path "$(APP)" is not valid)
@@ -109,7 +115,7 @@ disk_img:
 ifneq ($(wildcard $(DISK_IMG)),)
 	@echo "$(YELLOW_C)warning$(END_C): disk image \"$(DISK_IMG)\" already exists!"
 else
-	$(call make_disk_image,fat32,$(DISK_IMG))
+	$(call make_disk_image,$(FT),$(DISK_IMG))
 endif
 
 clean: clean_c

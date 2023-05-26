@@ -125,7 +125,11 @@ impl File {
         }
         let access_cap = opts.into();
         if !perm_to_cap(attr.perm()).contains(access_cap) {
-            error!("bad perm {} {}", perm_to_cap(attr.perm()).bits(), access_cap.bits());
+            error!(
+                "bad perm {} {}",
+                perm_to_cap(attr.perm()).bits(),
+                access_cap.bits()
+            );
             return ax_err!(PermissionDenied);
         }
 
@@ -146,7 +150,11 @@ impl File {
 
     pub fn lookup(path: &str) -> AxResult<Self> {
         let node = crate::root::lookup_symbolic(None, path, false)?;
-        Ok(Self { node: WithCap::new(node, Cap::empty()), is_append: false, offset: 0 })
+        Ok(Self {
+            node: WithCap::new(node, Cap::empty()),
+            is_append: false,
+            offset: 0,
+        })
     }
 
     pub fn truncate(&self, size: u64) -> AxResult {

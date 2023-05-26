@@ -13,8 +13,9 @@ use-virtio-blk = ["axdriver/virtio-blk"]
 devfs = ["dep:axfs_devfs"]
 ramfs = []
 fatfs = ["dep:fatfs"]
+ext2fs = ["dep:ext2fs"]
 
-default = ["use-ramdisk", "devfs", "ramfs", "fatfs"]
+default = ["use-ramdisk", "devfs", "ramfs", "ext2fs"]
 
 [dependencies]
 log = "0.4"
@@ -27,7 +28,7 @@ axio = { path = "../../crates/axio", features = ["alloc"] }
 axerrno = { path = "../../crates/axerrno" }
 axfs_vfs = { path = "../../crates/axfs_vfs" }
 axfs_devfs = { path = "../../crates/axfs_devfs", optional = true }
-ext2fs = { path = "../../crates/ext2fs" }
+ext2fs = { path = "../../crates/ext2fs" , optional = true}
 axdriver = { path = "../axdriver", optional = true }
 axsync = { path = "../axsync", default-features = false }
 

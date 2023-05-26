@@ -70,7 +70,7 @@ pub struct VfsDirEntry {
 /// Used for hard link
 pub struct LinkHandle {
     pub inode_id: usize,
-    pub fssp_ptr: usize
+    pub fssp_ptr: usize,
 }
 
 impl VfsNodePerm {
