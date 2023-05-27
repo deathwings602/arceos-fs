@@ -387,3 +387,35 @@ fn _lookup_symbolic(dir: Option<&VfsNodeRef>, path: &str, count: &mut usize, max
 
 ### 下一周计划
 1. 整合日志模块。
+
+## 第 14 周
+1. 整理代码，rebase 到最新的分支，通过所有 CI 测试，提交 PR。
+2. 进行了部分的和日志模块的整合，主要是实现了日志模块所要求的 Trait。
+```rust
+impl Buffer for BlockCacheWrapper {
+    fn block_id(&self) -> usize {
+        unsafe {self.unsafe_get_mut().block_id}
+    }
+    ...
+}
+
+impl BufferProvider for Ext2FileSystem {
+    fn get_buffer(&self, _dev: &alloc::sync::Arc<dyn jbd_rs::sal::BlockDevice>, block_id: usize) -> Option<Arc<dyn Buffer>> {
+        Some(self.manager.lock().get_block_cache(block_id))
+    }
+    ...
+}
+
+impl System for Ext2FileSystem {
+    fn get_buffer_provider(&self) -> Arc<dyn BufferProvider> {
+        self.inner.lock().to_self.as_ref().unwrap().upgrade().unwrap()
+    }
+    ...
+}
+```
+
+### 下一周计划
+1. 继续完成日志功能的整合，主要内容是：
+    + 在创建文件系统时载磁盘上初始化日志块，初始化日志系统
+    + 在挂载文件系统时加载日志系统
+    + 修改文件操作部分的代码，调用日志系统提供的接口，符合日志写的代码规范

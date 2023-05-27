@@ -1,3 +1,3 @@
 mod block_cache;
 
-pub use block_cache::{BlockCache, BlockCacheManager};
+pub use block_cache::{BlockCache, BlockCacheManager, BlockCacheWrapper};

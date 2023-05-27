@@ -4,6 +4,7 @@ use crate::mutex::SpinMutex;
 use crate::timer::TimeProvider;
 use crate::{block_cache_manager::BlockCacheManager, layout::EXT2_FT_DIR};
 use core::mem::size_of;
+use alloc::sync::Weak;
 use fs_utils::sync::Spin;
 use log::*;
 
@@ -27,7 +28,7 @@ pub struct Ext2FileSystem {
     /// provide time
     pub timer: Arc<dyn TimeProvider>,
     /// inner meta data
-    inner: Mutex<Ext2FileSystemInner>,
+    pub(crate) inner: Mutex<Ext2FileSystemInner>,
 }
 
 type DataBlock = [u8; BLOCK_SIZE];
@@ -161,7 +162,8 @@ impl Ext2FileSystem {
                 *disk_inode = DiskInode::new(IMODE::from_bits_truncate(0o777), EXT2_S_IFDIR, 0, 0);
             });
         fs.manager.lock().release_block(inode_block);
-
+        
+        inner.to_self = Some(Arc::downgrade(&fs));
         drop(inner);
         // TODO: write super blocks and group description table to disk
 
@@ -236,6 +238,7 @@ impl Ext2FileSystem {
             let mut inner = fs.inner.lock();
             inner.super_block.s_mnt_count += 1;
             inner.super_block.s_mtime = cur_time;
+            inner.to_self = Some(Arc::downgrade(&fs));
         }
 
         for (idx, desc) in fs.inner.lock().group_desc_table.iter().enumerate() {
@@ -243,7 +246,6 @@ impl Ext2FileSystem {
         }
 
         fs.write_super_block();
-
         fs
     }
 
@@ -447,11 +449,16 @@ impl Drop for Ext2FileSystem {
     }
 }
 
-struct Ext2FileSystemInner {
+pub(crate) struct Ext2FileSystemInner {
     /// Super block cache
     pub(crate) super_block: SuperBlock,
     /// Group description
     pub(crate) group_desc_table: Vec<BlockGroupDesc>,
+    /// Jbd handle
+    #[cfg(feature = "journal")]
+    pub(crate) handle_: Option<Arc<core::cell::RefCell<jbd_rs::Handle>>>,
+    /// Pointer to itself
+    pub(crate) to_self: Option<Weak<Ext2FileSystem>>
 }
 
 impl Ext2FileSystemInner {
@@ -459,6 +466,9 @@ impl Ext2FileSystemInner {
         Self {
             super_block: sb,
             group_desc_table: gdt,
+            #[cfg(feature = "journal")]
+            handle_: None,
+            to_self: None
         }
     }
 

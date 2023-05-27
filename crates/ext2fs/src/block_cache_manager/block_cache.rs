@@ -5,6 +5,7 @@ use crate::mutex::SpinMutex;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::any::Any;
 use core::marker::PhantomData;
 use core::ops::DerefMut;
 use fs_utils::{inlist_access, InListNode, ListNode};
@@ -12,12 +13,19 @@ use log::*;
 
 inlist_access!(pub ManagerAccessBlockCache, BlockCache, lru_head);
 
+pub struct BlockCacheWrapper(SpinMutex<BlockCache>);
+
 pub struct BlockCache {
     lru_head: InListNode<BlockCache, ManagerAccessBlockCache>,
-    block_id: usize,
-    modified: bool,
+    pub(crate) block_id: usize,
+    pub(crate) modified: bool,
     valid: bool,
-    cache: Box<[u8]>,
+    pub(crate) cache: Box<[u8]>,
+    pub(crate) private: Option<Box<dyn Any>>,
+    pub(crate) jbd_managed_: bool,
+    pub(crate) jbd_dirty_: bool,
+    pub(crate) revoked_: bool,
+    pub(crate) revoke_valid_: bool
 }
 
 impl BlockCache {
@@ -29,6 +37,11 @@ impl BlockCache {
                 modified: false,
                 valid: false,
                 cache: unsafe { cache.assume_init() },
+                private: None,
+                jbd_managed_: false,
+                jbd_dirty_: false,
+                revoked_: false,
+                revoke_valid_: false
             }),
             Err(_) => None,
         }
@@ -83,10 +96,21 @@ impl BlockCache {
     }
 }
 
+impl BlockCacheWrapper {
+    /// lock
+    pub fn lock(&self) -> impl DerefMut<Target = BlockCache> + '_ {
+        self.0.lock()
+    }
+    /// get mut
+    pub unsafe fn unsafe_get_mut(&self) -> &mut BlockCache {
+        self.0.unsafe_get_mut()
+    }
+}
+
 pub struct BlockCacheManager {
     device: Arc<dyn BlockDevice>,
     max_cache: usize,
-    blocks: BTreeMap<usize, Arc<SpinMutex<BlockCache>>>,
+    blocks: BTreeMap<usize, Arc<BlockCacheWrapper>>,
     lru_head: InListNode<BlockCache, ManagerAccessBlockCache>,
 }
 
@@ -115,7 +139,7 @@ impl BlockCacheManager {
         self.lru_head.lazy_init();
     }
 
-    pub fn get_block_cache(&mut self, block_id: usize) -> Arc<SpinMutex<BlockCache>> {
+    pub fn get_block_cache(&mut self, block_id: usize) -> Arc<BlockCacheWrapper> {
         // debug!("get_block_cache {}", block_id);
         if let Some(cache) = self.blocks.get(&block_id) {
             return cache.clone();
@@ -126,7 +150,7 @@ impl BlockCacheManager {
             // init
             self.device.read_block(block_id, new_cache.cache.as_mut());
             new_cache.valid = true;
-            let new_cache = Arc::new(SpinMutex::new(new_cache));
+            let new_cache = Arc::new(BlockCacheWrapper(SpinMutex::new(new_cache)));
             new_cache.lock().lru_head.lazy_init();
             // debug!("&self.lru_head = {}", &self.lru_head as *const _ as usize);
             // self.lru_head.list_check();
@@ -167,7 +191,7 @@ impl BlockCacheManager {
     /// Safety
     ///
     /// Should drop lock of BlockCache right before calling this function to avoid dead lock
-    pub fn release_block(&mut self, bac: Arc<SpinMutex<BlockCache>>) {
+    pub fn release_block(&mut self, bac: Arc<BlockCacheWrapper>) {
         if Arc::strong_count(&bac) == 2 {
             let ptr = unsafe { bac.unsafe_get_mut() };
             ptr.lru_head.pop_self();
@@ -175,7 +199,7 @@ impl BlockCacheManager {
         }
     }
 
-    pub fn write_block(&self, block: &Arc<SpinMutex<BlockCache>>) {
+    pub fn write_block(&self, block: &Arc<BlockCacheWrapper>) {
         let mut lk = block.lock();
         if lk.modified {
             lk.modified = false;
@@ -183,9 +207,17 @@ impl BlockCacheManager {
         }
     }
 
+    pub unsafe fn unsafe_write_by_id(&self, block_id: usize) {
+        let block = unsafe { self.blocks.get(&block_id).unwrap().unsafe_get_mut() };
+        if block.modified {
+            block.modified = false;
+            self.device.write_block(block.block_id, block.cache.as_ref());
+        }
+    }
+
     /// Use arc to record refcnt
     /// when unpin, just drop(cache)
-    pub fn pin_block(&self, block_id: usize) -> Option<Arc<SpinMutex<BlockCache>>> {
+    pub fn pin_block(&self, block_id: usize) -> Option<Arc<BlockCacheWrapper>> {
         self.blocks.get(&block_id).cloned()
     }
 

@@ -19,6 +19,9 @@ mod mutex;
 pub mod timer;
 mod vfs;
 
+#[cfg(feature = "journal")]
+mod jbd_interface;
+
 use bitmap::Bitmap;
 pub use block_dev::BlockDevice;
 pub use config::{BLOCKS_PER_GRP, BLOCK_SIZE};
@@ -29,3 +32,4 @@ pub use layout::{EXT2_S_IFDIR, EXT2_S_IFREG};
 pub use timer::{TimeProvider, ZeroTimeProvider};
 pub use vfs::Inode;
 use vfs::InodeCache;
+
