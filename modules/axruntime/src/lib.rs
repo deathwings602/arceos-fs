@@ -280,7 +280,6 @@ fn init_interrupt() {
     axhal::arch::enable_irqs();
 }
 
-
 /// Clean anything that should be recycled when closing system
 pub fn close_runtime() {
     debug!("Close runtime...");

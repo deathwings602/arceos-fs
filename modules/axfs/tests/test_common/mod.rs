@@ -284,7 +284,10 @@ fn test_symbolic_link() -> Result<()> {
     println!("Under {}:\n{}", sname1, &content);
 
     assert!(fs::remove_file(fname1).is_ok());
-    assert_err!(File::options().read(true).write(true).open(sname1), NotFound);
+    assert_err!(
+        File::options().read(true).write(true).open(sname1),
+        NotFound
+    );
     assert!(fs::metadata(sname1).is_ok());
 
     // link dir
@@ -296,7 +299,6 @@ fn test_symbolic_link() -> Result<()> {
 
     println!("test_symbolic_link() ok");
     Ok(())
-
 }
 
 fn test_link() -> Result<()> {
@@ -320,15 +322,24 @@ fn test_link() -> Result<()> {
     println!("Under {}:\n{}", fname1, &content);
 
     assert_err!(fs::link_file(fname1, fname2), AlreadyExists);
-    assert_err!(fs::link_file("test-dir-link/c.txt", "/test-dir-link/not-exist.txt"), NotFound);
-    
+    assert_err!(
+        fs::link_file("test-dir-link/c.txt", "/test-dir-link/not-exist.txt"),
+        NotFound
+    );
+
     // can not link dir
-    assert_err!(fs::link_file("test-dir-link/dirl", "test-dir-link/dird"), Unsupported);
-    
+    assert_err!(
+        fs::link_file("test-dir-link/dirl", "test-dir-link/dird"),
+        Unsupported
+    );
+
     // ramfs doesn't support link, and ext2fs doesn't support linking to other fs
     assert_err!(fs::link_file(fname3, fname2), Unsupported);
     assert!(fs::write(fname3, "test ramfs link").is_ok());
-    assert_err!(fs::link_file("test-dir-link/link-ramfs.txt", fname3), Unsupported);
+    assert_err!(
+        fs::link_file("test-dir-link/link-ramfs.txt", fname3),
+        Unsupported
+    );
 
     println!("test_link() ok");
     Ok(())
