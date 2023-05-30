@@ -188,5 +188,16 @@ fn efs_test() -> std::io::Result<()> {
     random_str_test(1000 * BLOCK_SIZE);
     random_str_test(2000 * BLOCK_SIZE);
 
+    root_inode.rm_file("filea");
+
+    let d1 = root_inode.create_dir("very").unwrap();
+    let d2 = d1.create_dir("long").unwrap();
+    let d3 = d2.create_dir("path").unwrap();
+    let f1 = d3.create_file("test.txt").unwrap();
+    f1.write_at(0, "test".as_bytes()).unwrap();
+    
+    let f2 = root_inode.create_file("short.txt").unwrap();
+    f2.write_at(0, "short".as_bytes()).unwrap();
+
     Ok(())
 }

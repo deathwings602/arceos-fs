@@ -263,3 +263,98 @@ pub fn test_all() {
     test_remove_file_dir().expect("test_remove_file_dir() failed");
     test_devfs_ramfs().expect("test_devfs_ramfs() failed");
 }
+
+fn test_symbolic_link() -> Result<()> {
+    let fname1 = "/a.txt";
+    let dname1 = "/test-dir-sym";
+    let fname2 = "/dirs/c.txt";
+    let fname3 = "/test-dir-sym/c.txt";
+    let sname1 = "g.txt";
+    let sname2 = "dirs";
+
+    // link file
+    assert_err!(fs::metadata(fname1), NotFound);
+    assert!(fs::write(fname1, "test link file").is_ok());
+    fs::symbolic_link(sname1, fname1)?;
+    assert_err!(fs::symbolic_link(sname1, fname1), AlreadyExists);
+    let mut content = String::new();
+    let mut file = File::options().read(true).write(true).open(sname1)?;
+    file.read_to_string(&mut content)?;
+    drop(file);
+    println!("Under {}:\n{}", sname1, &content);
+
+    assert!(fs::remove_file(fname1).is_ok());
+    assert_err!(File::options().read(true).write(true).open(sname1), NotFound);
+    assert!(fs::metadata(sname1).is_ok());
+
+    // link dir
+    assert!(fs::create_dir(dname1).is_ok());
+    fs::symbolic_link(sname2, dname1)?;
+    assert!(fs::write(fname2, "test link dir").is_ok());
+    assert!(File::options().read(true).write(true).open(fname2).is_ok());
+    assert!(File::options().read(true).write(true).open(fname3).is_ok());
+
+    println!("test_symbolic_link() ok");
+    Ok(())
+
+}
+
+fn test_link() -> Result<()> {
+    let dname1 = "test-dir-link";
+    let dname2 = "test-dir-link/dird";
+    let fname1 = "test-dir-link/a.txt";
+    let fname2 = "test-dir-link/dird/b.txt";
+    let fname3 = "tmp/test-link.txt";
+
+    // link file
+    assert_err!(fs::metadata(dname1), NotFound);
+    assert!(fs::create_dir(dname1).is_ok());
+    assert!(fs::create_dir(dname2).is_ok());
+    assert!(fs::write(fname2, "test hard link").is_ok());
+    assert!(fs::link_file(fname1, fname2).is_ok());
+
+    let mut content = String::new();
+    let mut file = File::options().read(true).write(true).open(fname1)?;
+    file.read_to_string(&mut content)?;
+    drop(file);
+    println!("Under {}:\n{}", fname1, &content);
+
+    assert_err!(fs::link_file(fname1, fname2), AlreadyExists);
+    assert_err!(fs::link_file("test-dir-link/c.txt", "/test-dir-link/not-exist.txt"), NotFound);
+    
+    // can not link dir
+    assert_err!(fs::link_file("test-dir-link/dirl", "test-dir-link/dird"), Unsupported);
+    
+    // ramfs doesn't support link, and ext2fs doesn't support linking to other fs
+    assert_err!(fs::link_file(fname3, fname2), Unsupported);
+    assert!(fs::write(fname3, "test ramfs link").is_ok());
+    assert_err!(fs::link_file("test-dir-link/link-ramfs.txt", fname3), Unsupported);
+
+    println!("test_link() ok");
+    Ok(())
+}
+
+fn test_recursive_remove() -> Result<()> {
+    let dname = "test-dir/path";
+    let fname = "test-dir/test1.txt";
+    // create a dir
+    assert!(fs::create_dir("test-dir").is_ok());
+    assert!(fs::create_dir(dname).is_ok());
+    assert_err!(fs::metadata(fname), NotFound);
+
+    assert!(fs::write(fname, "test text").is_ok());
+
+    assert_err!(fs::remove_dir("test-dir", false), DirectoryNotEmpty);
+    assert!(fs::remove_dir("test-dir", true).is_ok());
+    assert_err!(fs::metadata(fname), NotFound);
+
+    println!("test_recursive_remove() ok");
+
+    Ok(())
+}
+
+pub fn test_extra() {
+    test_symbolic_link().expect("test_symbolic_link() failed");
+    test_link().expect("test_link() failed");
+    test_recursive_remove().expect("test_recursive_remove() failed");
+}

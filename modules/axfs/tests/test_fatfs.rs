@@ -1,12 +1,14 @@
 #![cfg(not(feature = "myfs"))]
-#![cfg(not(feature = "ext2fs"))]
 
 mod test_common;
 
 use axdriver::AxDeviceContainer;
 use driver_block::ramdisk::RamDisk;
 
+#[cfg(feature = "fatfs")]
 const IMG_PATH: &str = "resources/fat16.img";
+#[cfg(feature = "ext2fs")]
+const IMG_PATH: &str = "resources/fs.img";
 
 fn make_disk() -> std::io::Result<RamDisk> {
     let path = std::env::current_dir()?.join(IMG_PATH);
@@ -25,4 +27,6 @@ fn test_fatfs() {
     axfs::init_filesystems(AxDeviceContainer::from_one(disk));
 
     test_common::test_all();
+    #[cfg(feature = "ext2fs")]
+    test_common::test_extra();
 }

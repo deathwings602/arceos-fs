@@ -37,12 +37,6 @@ impl Drop for MountPoint {
     }
 }
 
-impl Drop for RootDirectory {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
 impl RootDirectory {
     pub const fn new(main_fs: Arc<dyn VfsOps>) -> Self {
         Self {

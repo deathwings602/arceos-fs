@@ -186,6 +186,7 @@ pub extern "C" fn rust_main(cpu_id: usize, dtb: usize) -> ! {
 
     unsafe { main() };
 
+    close_runtime();
     #[cfg(feature = "multitask")]
     axtask::exit(0);
     #[cfg(not(feature = "multitask"))]
@@ -277,4 +278,12 @@ fn init_interrupt() {
 
     // Enable IRQs before starting app
     axhal::arch::enable_irqs();
+}
+
+
+/// Clean anything that should be recycled when closing system
+pub fn close_runtime() {
+    debug!("Close runtime...");
+    #[cfg(feature = "fs")]
+    axfs::close_main_fs();
 }
