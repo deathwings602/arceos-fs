@@ -79,6 +79,14 @@ pub enum AxError {
     /// An error returned when an operation could not be completed because a
     /// call to `write()` returned [`Ok(0)`](Ok).
     WriteZero,
+    /// Loop too many times when looking up symbolicly
+    LoopTooMany,
+    /// Too big
+    TooBig,
+    /// Link too many
+    LinkTooMany,
+    /// Different deviece
+    DifferentDeviece
 }
 
 /// A specialized [`Result`] type with [`AxError`] as the error type.
@@ -214,6 +222,10 @@ impl From<AxError> for LinuxError {
             StorageFull => LinuxError::ENOSPC,
             Unsupported => LinuxError::ENOSYS,
             UnexpectedEof | WriteZero => LinuxError::EIO,
+            LoopTooMany => LinuxError::ELOOP,
+            LinkTooMany => LinuxError::EMLINK,
+            TooBig => LinuxError::E2BIG,
+            DifferentDeviece => LinuxError::EXDEV
         }
     }
 }

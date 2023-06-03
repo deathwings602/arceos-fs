@@ -17,6 +17,7 @@ pub(crate) const DIRECT_BLOCK_NUM: usize = 13;
 pub(crate) const DOUBLE_BLOCK_NUM: usize = BLOCK_SIZE / 4;
 pub(crate) const DOUBLE_BLOCK_BOUND: usize = DIRECT_BLOCK_NUM + DOUBLE_BLOCK_NUM;
 pub(crate) const TRIPLE_BLOCK_NUM: usize = (BLOCK_SIZE / 4) * (BLOCK_SIZE / 4);
+pub(crate) const MAX_FILE_SIZE: usize = BLOCK_SIZE * (TRIPLE_BLOCK_NUM + DOUBLE_BLOCK_BOUND);
 // pub const TRIPLE_BLOCK_BOUND: usize = TRIPLE_BLOCK_NUM + DOUBLE_BLOCK_BOUND;
 pub(crate) const SB_MAGIC: u16 = 0xEF53;
 

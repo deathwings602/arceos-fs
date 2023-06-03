@@ -278,7 +278,7 @@ impl VfsNodeOps for Ext2DirWrapper {
     fn link(&self, name: &str, handle: &axfs_vfs::LinkHandle) -> VfsResult {
         debug!("ext2 link {} to inode {}", name, handle.inode_id);
         if self.1.as_ptr() as usize != handle.fssp_ptr {
-            return Err(VfsError::InvalidInput);
+            return Err(VfsError::DifferentDeviece);
         }
         let res = self.0.link(name, handle.inode_id).map_err(map_ext2_err);
         #[cfg(feature = "force_close")]
@@ -368,6 +368,8 @@ const fn map_ext2_err(err: Ext2Error) -> VfsError {
         NotEnoughSpace => VfsError::StorageFull,
         NotADir => VfsError::NotADirectory,
         NotAFile => VfsError::IsADirectory,
+        TooBig => VfsError::TooBig,
+        LinkTooMany => VfsError::LinkTooMany,
         InvalidResource => VfsError::NotFound,
         _ => VfsError::InvalidInput,
     }

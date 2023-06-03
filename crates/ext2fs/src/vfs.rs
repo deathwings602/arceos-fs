@@ -9,6 +9,7 @@ use super::{
     layout::{
         DirEntryHead, DEFAULT_IMODE, EXT2_FT_DIR, EXT2_FT_REG_FILE, EXT2_FT_SYMLINK,
         EXT2_FT_UNKNOWN, EXT2_S_IFDIR, EXT2_S_IFLNK, EXT2_S_IFREG, IMODE, MAX_NAME_LEN,
+        MAX_FILE_SIZE
     },
     DiskInode, Ext2Error, Ext2FileSystem, Ext2Result,
 };
@@ -106,6 +107,9 @@ impl Inode {
 
     /// Change file size
     pub fn ftruncate(&self, new_size: usize) -> Ext2Result {
+        if new_size > MAX_FILE_SIZE {
+            return Err(Ext2Error::TooBig);
+        }
         self.access()?.lock().ftruncate(new_size as _)
     }
 
@@ -421,9 +425,9 @@ impl InodeCache {
             let mut lk = new_inode.lock();
             lk.append_dir_entry(new_inode_id as usize, ".", EXT2_FT_DIR);
             lk.append_dir_entry(self.inode_id, "..", EXT2_FT_DIR);
-            lk.increase_nlink(1);
+            lk.increase_nlink(1).unwrap();
 
-            self.increase_nlink(1);
+            self.increase_nlink(1).unwrap();
         }
 
         self.get_fs().write_meta();
@@ -454,8 +458,8 @@ impl InodeCache {
                 if lk.file_type() != EXT2_FT_REG_FILE {
                     return Err(Ext2Error::LinkToDir);
                 }
+                lk.increase_nlink(1)?;
                 self.append_dir_entry(inode_id, name, EXT2_FT_REG_FILE);
-                lk.increase_nlink(1);
                 self.get_fs().write_meta();
                 Ok(())
             }
@@ -712,10 +716,15 @@ impl InodeCache {
         }
     }
 
-    pub(crate) fn increase_nlink(&self, by: usize) {
+    pub(crate) fn increase_nlink(&self, by: usize) -> Ext2Result {
         self.modify_disk_inode(|disk_inode| {
-            disk_inode.i_links_count += by as u16;
-        });
+            if disk_inode.i_links_count as usize + by > 32767 {
+                Err(Ext2Error::LinkTooMany)
+            } else {
+                disk_inode.i_links_count += by as u16;
+                Ok(())
+            }
+        })
     }
 
     fn cache_increase_size(&mut self, new_size: u32) {

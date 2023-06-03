@@ -29,6 +29,10 @@ pub enum Ext2Error {
     NotSymlink,
     /// Invalid file/directory name
     InvalidName,
+    /// Too many link
+    LinkTooMany,
+    /// ftruncate too big
+    TooBig
 }
 
 /// Ext2Result

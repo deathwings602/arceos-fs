@@ -447,7 +447,7 @@ fn _lookup_symbolic(
             }
             *count += 1;
             if *count > max_count {
-                return Err(VfsError::NotFound);
+                return Err(VfsError::LoopTooMany);
             }
             let mut new_path = vnode.get_path()?;
             let rest_path = names[idx + 1..].join("/");

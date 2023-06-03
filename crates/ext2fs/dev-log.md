@@ -387,3 +387,46 @@ fn _lookup_symbolic(dir: Option<&VfsNodeRef>, path: &str, count: &mut usize, max
 
 ### 下一周计划
 1. 整合日志模块。
+
+## 第 15 周
+1. 归纳整理了 `pjdfstest` 中和目前实现的功能有关的测试用例，下面是大致的说明：
++ 共同的部分：
+    - [ * ] ENOTDIR: 搜索路径的一部分不是目录
+    - [ x ] ENAMETOOLONG: 搜索路径的某个部分过长或者整体过长（rust 中无需担心？）
+    - [ * ] ENOENT: 文件不存在
+    - [ x ] EACCESS: 路径搜索过程中不被允许（当前的 VFS 设计不支持）；文件/文件夹不能被用户写（VFS 不支持）
+    - [ * ] ELOOP: 太多的符号跳转
+    - [ x ] EROFS: 文件系统只读
+    - [ x ] ETXTBSY: 文件是一个 "pure procedure (shared text) file that is being executed"
+    - [ x ] ENOSPC: 空间不足
+
++ ftruncate
+    - [ * ] EFBIG: 设置的大小太大
+    - [ * ] EINVAL: 设置小于 0 的值（rust 的类型机制已经保证了这一点）
+    - [ x ] EPERM: 文件本身不支持这种操作，比如 immutable 或者 append_only
+    - [ * ] EISDIR: 该操作只能对文件生效
+
++ link
+    - [ * ] EMLINK: link 数量太多了
+    - [ * ] EEXIST: 已经存在
+    - [ * ] EPERM: 对象是个目录；immutable or append-only flag set
+    - [ * ] EXDEV: 不同的设备
+
++ mkdir
+    - [ x ] EPERM: 父目录有 immutable 标志
+
++ open
+    - [ x ] ENXIO: O_NONBLOCK 置位，且文件是 FIFO
+
++ rmdir
+    - [ * ] ENOTEMPTY: 文件夹非空
+    - [ x ] EPERM: 该目录和父目录都有 immutable 标志
+    - [ * ] EINVAL: 以 . 和 .. 结尾
+
+2. 按照上面的错误说明补充了现阶段可以补充的错误类型和判定。
+
+3. 补充了对于 `link`，`symblolic_link` 和修改后的（支持递归）`rm_dir` 的测例，位于
+`modules/axfs/src/test/test_fatfs.rs` 中，在选择文件系统为 Ext2 时启用。
+
+### 下一周计划
+1. 写报告，完结撒花。
